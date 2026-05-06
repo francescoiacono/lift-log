@@ -1,0 +1,21 @@
+.app-shell {
+  box-sizing: border-box;
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.app-shell h1 {
+  margin: 0;
+  color: #111827;
+  font-size: 48px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+@media (min-width: 640px) {
+  .app-shell h1 {
+    font-size: 64px;
+  }
+}

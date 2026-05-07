@@ -65,7 +65,8 @@ export default defineConfig({
       MozOsxFontSmoothing: "grayscale",
     },
     body: {
-      margin: "0",
+      marginBlock: "0",
+      marginInline: "0",
     },
   },
 });

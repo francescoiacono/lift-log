@@ -72,6 +72,13 @@ Technical direction:
 - Prefer named exports over default exports wherever the framework does not require a default export.
 - Use required framework/tooling filenames as-is when a tool expects them, such as `AGENTS.md`, `README.md`, `Dockerfile`, or config files.
 
+## Documentation
+
+- Add TSDoc comments to utility functions, including utility functions defined inside components.
+- Add a one-line TSDoc summary to each type and interface.
+- Add a one-line TSDoc comment to each property in each type or interface.
+- Add inline comments for complex logic or major function sections only when they improve readability.
+
 ## Structure
 
 - Use a feature-first structure around gym tracking workflows.
@@ -83,6 +90,7 @@ Technical direction:
 - Put active session UI, state, helpers, and tests under `src/features/sessions/`.
 - Put rest timer UI, state, helpers, and tests under `src/features/timer/`.
 - Put database schema, Dexie setup, repositories, and migrations under `src/db/`.
+- Put locale configuration, message dictionaries, and lightweight i18n helpers under `src/i18n/`.
 - Put shared reusable UI under `src/components/` only when it is genuinely useful across multiple features.
 - Put shared types under the relevant feature first; promote to `src/types/` only when used across unrelated features.
 - Put static icons, illustrations, and PWA assets under `src/assets/`.
@@ -94,9 +102,17 @@ Technical direction:
 - Use PandaCSS for app and component styling.
 - Use the app color identity of charcoal black backgrounds, elevated graphite surfaces, and electric lime accents.
 - Prefer semantic color tokens such as `bg`, `card`, `fg`, `fgMuted`, `accent`, and `line` in component styles instead of raw hex values.
-- Prefer logical CSS properties in Panda styles, such as `inlineSize`, `blockSize`, `minBlockSize`, `paddingInline`, `paddingBlock`, `marginInline`, and `insetInlineStart`, over physical properties or shorthand aliases such as `width`, `height`, `minH`, `px`, `pl`, `left`, and `right`.
+- Use logical CSS properties for layout, spacing, sizing, borders, radii, scrolling, and positioning. Prefer `inlineSize`, `blockSize`, `minBlockSize`, `paddingInline`, `paddingBlock`, `marginInline`, `marginBlock`, `insetInlineStart`, `borderInline`, and `borderStartStartRadius` over physical properties or shorthand aliases such as `width`, `height`, `minH`, `m`, `mx`, `px`, `pl`, `left`, and `right`.
 - Put component styles in a `{component-file-name}.styles.ts` file next to the component when the styles are component-specific, such as `app.styles.ts` for `app.tsx`.
 - Import `css` and `cva` from `styled-system/css`.
 - Export a named `styles` constant; use `css({})` directly for single-class components or a `styles` object of `css({})` classes for multi-part components.
 - Use `cva({})` for components with variants, sizes, or visual states that should be selected from props.
 - Keep global CSS limited to the Panda layer entry and true app-wide base styles.
+
+## Internationalisation
+
+- Keep user-visible copy in locale message files under `src/i18n/messages/`, not inline in components or feature logic.
+- Use stable nested message keys grouped by app area or feature, such as `app.title` or `sessions.finishWorkout`.
+- Keep the default locale and supported locale metadata in `src/i18n/locales.ts`.
+- Set document `lang` and `dir` from locale metadata when wiring the app.
+- Avoid splitting translated sentences across components or concatenating copy from multiple message keys.

@@ -11,7 +11,8 @@ export const styles = {
     bg: "bg",
   }),
   title: css({
-    m: "0",
+    marginBlock: "0",
+    marginInline: "0",
     color: "fg",
     fontSize: {
       base: "48px",

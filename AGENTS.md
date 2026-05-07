@@ -92,6 +92,9 @@ Technical direction:
 ## Styling
 
 - Use PandaCSS for app and component styling.
+- Use the app color identity of charcoal black backgrounds, elevated graphite surfaces, and electric lime accents.
+- Prefer semantic color tokens such as `bg`, `card`, `fg`, `fgMuted`, `accent`, and `line` in component styles instead of raw hex values.
+- Prefer logical CSS properties in Panda styles, such as `inlineSize`, `blockSize`, `minBlockSize`, `paddingInline`, `paddingBlock`, `marginInline`, and `insetInlineStart`, over physical properties or shorthand aliases such as `width`, `height`, `minH`, `px`, `pl`, `left`, and `right`.
 - Put component styles in a `{component-file-name}.styles.ts` file next to the component when the styles are component-specific, such as `app.styles.ts` for `app.tsx`.
 - Import `css` and `cva` from `styled-system/css`.
 - Export a named `styles` constant; use `css({})` directly for single-class components or a `styles` object of `css({})` classes for multi-part components.

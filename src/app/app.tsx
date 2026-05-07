@@ -1,4 +1,5 @@
 import { styles } from "./app.styles";
+import { ExerciseLibrary } from "@/features/exercises";
 import { defaultLocale, getMessages, type Locale } from "@/i18n";
 
 /** Props for the root application component. */
@@ -13,7 +14,7 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
 
   return (
     <main className={styles.shell}>
-      <h1 className={styles.title}>{messages.app.title}</h1>
+      <ExerciseLibrary messages={messages.exercises} />
     </main>
   );
 };

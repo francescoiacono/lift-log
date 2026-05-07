@@ -88,3 +88,12 @@ Technical direction:
 - Put static icons, illustrations, and PWA assets under `src/assets/`.
 - Use the `@/` import alias for shared or cross-feature imports from `src`.
 - Add entry points with `index.ts` when they make imports cleaner, such as `@/app`, `@/db`, or `@/features/sessions`.
+
+## Styling
+
+- Use PandaCSS for app and component styling.
+- Put component styles in a `{component-file-name}.styles.ts` file next to the component when the styles are component-specific, such as `app.styles.ts` for `app.tsx`.
+- Import `css` and `cva` from `styled-system/css`.
+- Export a named `styles` constant; use `css({})` directly for single-class components or a `styles` object of `css({})` classes for multi-part components.
+- Use `cva({})` for components with variants, sizes, or visual states that should be selected from props.
+- Keep global CSS limited to the Panda layer entry and true app-wide base styles.

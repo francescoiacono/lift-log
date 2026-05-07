@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev",
-    "build": "tsc -b && vp build",
+    "build": "panda codegen && tsc -b && vp build",
+    "codegen": "panda codegen",
     "lint": "vp lint .",
     "preview": "vp preview",
-    "prepare": "vp config"
+    "prepare": "vp config && panda codegen"
   },
   "dependencies": {
     "react": "^19.2.5",
@@ -16,6 +17,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@pandacss/dev": "^1.11.0",
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

@@ -1,8 +1,16 @@
-import { defineConfig } from "vite-plus";
+import { fileURLToPath, URL } from "node:url";
+
 import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite-plus";
 
 // https://vite.dev/config/
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "styled-system": fileURLToPath(new URL("./styled-system", import.meta.url)),
+    },
+  },
   staged: {
     "*": "vp check --fix",
   },

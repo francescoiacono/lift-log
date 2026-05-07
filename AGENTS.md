@@ -90,6 +90,9 @@ Technical direction:
 - Put active session UI, state, helpers, and tests under `src/features/sessions/`.
 - Put rest timer UI, state, helpers, and tests under `src/features/timer/`.
 - Put database schema, Dexie setup, repositories, and migrations under `src/db/`.
+- Use Dexie with typed string IDs and ISO timestamp strings for local-first persisted records.
+- Keep IndexedDB schema changes versioned in `src/db/database.ts`; add migrations instead of mutating existing schema versions once data may exist.
+- Access persisted data through typed repositories instead of using Dexie tables directly from UI components.
 - Put locale configuration, message dictionaries, and lightweight i18n helpers under `src/i18n/`.
 - Put shared reusable UI under `src/components/` only when it is genuinely useful across multiple features.
 - Put shared types under the relevant feature first; promote to `src/types/` only when used across unrelated features.

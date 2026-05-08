@@ -1,3 +1,4 @@
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { Check, CirclePlus, Dumbbell, Pencil, Trash2, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -181,30 +182,21 @@ export const ExerciseLibrary = ({
     }
   };
 
-  /** Requests delete confirmation for the selected exercise. */
-  const requestDelete = (exerciseId: EntityId) => {
-    setPendingDeleteId(exerciseId);
+  /** Updates the controlled delete dialog state for an exercise row. */
+  const updateDeleteDialog = (isOpen: boolean, exerciseId: EntityId) => {
+    setPendingDeleteId(isOpen ? exerciseId : null);
     setFeedbackMessage(null);
   };
 
-  /** Deletes the exercise currently awaiting confirmation. */
-  const confirmDelete = async () => {
-    if (!pendingDeleteId) {
-      return;
-    }
-
+  /** Deletes the confirmed exercise. */
+  const confirmDelete = async (exerciseId: EntityId) => {
     try {
-      await repository.deleteById(pendingDeleteId);
+      await repository.deleteById(exerciseId);
       setPendingDeleteId(null);
       await refreshExercises();
     } catch {
       setFeedbackMessage(messages.deleteError);
     }
-  };
-
-  /** Cancels the pending delete confirmation. */
-  const cancelDelete = () => {
-    setPendingDeleteId(null);
   };
 
   return (
@@ -360,47 +352,59 @@ export const ExerciseLibrary = ({
                 >
                   <Pencil className={styles.icon} aria-hidden="true" />
                 </button>
-                <button
-                  aria-label={formatExerciseActionLabel(
-                    messages.deleteExerciseAriaLabel,
-                    exercise.name,
-                  )}
-                  className={styles.iconButton({ variant: "danger" })}
-                  type="button"
-                  onClick={() => requestDelete(exercise.id)}
+                <AlertDialog.Root
+                  open={pendingDeleteId === exercise.id}
+                  onOpenChange={(isOpen) => updateDeleteDialog(isOpen, exercise.id)}
                 >
-                  <Trash2 className={styles.icon} aria-hidden="true" />
-                </button>
-              </div>
-
-              {pendingDeleteId === exercise.id ? (
-                <div className={styles.deletePanel}>
-                  <div>
-                    <h3 className={styles.deleteTitle}>{messages.deleteConfirmTitle}</h3>
-                    <p className={styles.deleteDescription}>
-                      <strong>{exercise.name}</strong>
-                      <span>{messages.deleteConfirmDescription}</span>
-                    </p>
-                  </div>
-                  <div className={styles.deleteActions}>
+                  <AlertDialog.Trigger asChild>
                     <button
-                      className={styles.button({ variant: "danger" })}
+                      aria-label={formatExerciseActionLabel(
+                        messages.deleteExerciseAriaLabel,
+                        exercise.name,
+                      )}
+                      className={styles.iconButton({ variant: "danger" })}
                       type="button"
-                      onClick={confirmDelete}
                     >
                       <Trash2 className={styles.icon} aria-hidden="true" />
-                      <span>{messages.deleteConfirmAction}</span>
                     </button>
-                    <button
-                      className={styles.button({ variant: "secondary" })}
-                      type="button"
-                      onClick={cancelDelete}
-                    >
-                      {messages.deleteCancelAction}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
+                  </AlertDialog.Trigger>
+
+                  <AlertDialog.Portal>
+                    <AlertDialog.Overlay className={styles.dialogOverlay} />
+                    <div className={styles.dialogViewport}>
+                      <AlertDialog.Content className={styles.dialogContent}>
+                        <AlertDialog.Title className={styles.dialogTitle}>
+                          {messages.deleteConfirmTitle}
+                        </AlertDialog.Title>
+                        <AlertDialog.Description className={styles.dialogDescription}>
+                          <strong>{exercise.name}</strong>
+                          <span>{messages.deleteConfirmDescription}</span>
+                        </AlertDialog.Description>
+                        <div className={styles.dialogActions}>
+                          <AlertDialog.Action asChild>
+                            <button
+                              className={styles.button({ variant: "danger" })}
+                              type="button"
+                              onClick={() => void confirmDelete(exercise.id)}
+                            >
+                              <Trash2 className={styles.icon} aria-hidden="true" />
+                              <span>{messages.deleteConfirmAction}</span>
+                            </button>
+                          </AlertDialog.Action>
+                          <AlertDialog.Cancel asChild>
+                            <button
+                              className={styles.button({ variant: "secondary" })}
+                              type="button"
+                            >
+                              {messages.deleteCancelAction}
+                            </button>
+                          </AlertDialog.Cancel>
+                        </div>
+                      </AlertDialog.Content>
+                    </div>
+                  </AlertDialog.Portal>
+                </AlertDialog.Root>
+              </div>
             </li>
           ))}
         </ul>

@@ -46,6 +46,7 @@ Technical direction:
 - Planned stack is Vite+ + React + TypeScript, PandaCSS, Radix UI, Lucide React, `clsx`, Dexie.js, and `vite-plugin-pwa`.
 - Use IndexedDB through Dexie.js as the local source of truth for exercises, workout templates, workout sessions, settings, and active workout persistence.
 - Use React state and custom hooks for local UI state.
+- Use Radix UI primitives for behavior-heavy accessible components such as dialogs, alert dialogs, popovers, menus, tabs, selects, and tooltips; keep simple controls as native HTML when Radix does not add meaningful behavior.
 - Do not introduce a backend for the MVP unless multi-device sync, accounts, or remote backups become explicit requirements.
 - Deploy the static PWA with Docker on a VPS using Dokploy.
 - The domain is managed through Cloudflare.

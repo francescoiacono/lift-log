@@ -49,6 +49,7 @@ Technical direction:
 - Use Radix UI primitives for behavior-heavy accessible components such as dialogs, alert dialogs, popovers, menus, tabs, selects, and tooltips; keep simple controls as native HTML when Radix does not add meaningful behavior.
 - Do not introduce a backend for the MVP unless multi-device sync, accounts, or remote backups become explicit requirements.
 - Deploy the static PWA with Docker on a VPS using Dokploy.
+- Keep the Dockerfile runtime stage named `production` so Dokploy can target that build stage.
 - The domain is managed through Cloudflare.
 
 ## UX Principles

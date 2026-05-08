@@ -1,0 +1,13 @@
+.git
+.DS_Store
+dist
+node_modules
+styled-system
+
+*.log
+.env
+.env.*
+
+coverage
+.vite
+.turbo

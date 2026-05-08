@@ -1,4 +1,5 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
+import * as Dialog from "@radix-ui/react-dialog";
 import { Check, CirclePlus, Dumbbell, Pencil, Trash2, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -104,6 +105,8 @@ export const ExerciseLibrary = ({
 
   const isEditing = editingExerciseId !== null;
   const canSubmit = formState.name.trim().length > 0;
+  const formFeedbackMessage = isFormOpen ? feedbackMessage : null;
+  const pageFeedbackMessage = isFormOpen ? null : feedbackMessage;
 
   /** Refreshes the local exercise list from IndexedDB. */
   const refreshExercises = useCallback(async () => {
@@ -144,6 +147,16 @@ export const ExerciseLibrary = ({
     setEditingExerciseId(null);
     setFeedbackMessage(null);
     setIsFormOpen(false);
+  };
+
+  /** Updates the controlled form dialog state. */
+  const updateFormDialog = (isOpen: boolean) => {
+    if (isOpen) {
+      setIsFormOpen(true);
+      return;
+    }
+
+    closeForm();
   };
 
   /** Updates one field in the exercise form state. */
@@ -225,79 +238,90 @@ export const ExerciseLibrary = ({
         </div>
       </header>
 
-      {feedbackMessage ? <p className={styles.feedback}>{feedbackMessage}</p> : null}
+      {pageFeedbackMessage ? <p className={styles.feedback}>{pageFeedbackMessage}</p> : null}
 
-      {isFormOpen ? (
-        <form className={styles.formPanel} onSubmit={saveExercise}>
-          <div className={styles.formHeader}>
-            <h2 className={styles.formTitle}>
-              {isEditing ? messages.formEditTitle : messages.formCreateTitle}
-            </h2>
-            <button
-              className={styles.iconButton({ variant: "ghost" })}
-              type="button"
-              onClick={closeForm}
-            >
-              <X className={styles.icon} aria-hidden="true" />
-              <span className={styles.visuallyHidden}>{messages.cancelAction}</span>
-            </button>
+      <Dialog.Root open={isFormOpen} onOpenChange={updateFormDialog}>
+        <Dialog.Portal>
+          <Dialog.Overlay className={styles.dialogOverlay} />
+          <div className={styles.dialogViewport}>
+            <Dialog.Content className={styles.formDialogContent}>
+              <form className={styles.formPanel} onSubmit={saveExercise}>
+                <div className={styles.formHeader}>
+                  <Dialog.Title className={styles.formTitle}>
+                    {isEditing ? messages.formEditTitle : messages.formCreateTitle}
+                  </Dialog.Title>
+                  <Dialog.Close asChild>
+                    <button className={styles.iconButton({ variant: "ghost" })} type="button">
+                      <X className={styles.icon} aria-hidden="true" />
+                      <span className={styles.visuallyHidden}>{messages.cancelAction}</span>
+                    </button>
+                  </Dialog.Close>
+                </div>
+
+                <Dialog.Description className={styles.visuallyHidden}>
+                  {messages.description}
+                </Dialog.Description>
+
+                {formFeedbackMessage ? (
+                  <p className={styles.feedback}>{formFeedbackMessage}</p>
+                ) : null}
+
+                <label className={styles.field}>
+                  <span className={styles.label}>{messages.nameLabel}</span>
+                  <input
+                    className={styles.input}
+                    value={formState.name}
+                    placeholder={messages.namePlaceholder}
+                    onChange={(event) => updateFormField("name", event.currentTarget.value)}
+                  />
+                </label>
+
+                <label className={styles.field}>
+                  <span className={styles.label}>{messages.muscleGroupsLabel}</span>
+                  <input
+                    className={styles.input}
+                    value={formState.muscleGroups}
+                    placeholder={messages.muscleGroupsPlaceholder}
+                    onChange={(event) => updateFormField("muscleGroups", event.currentTarget.value)}
+                  />
+                </label>
+
+                <label className={styles.field}>
+                  <span className={styles.label}>{messages.equipmentLabel}</span>
+                  <input
+                    className={styles.input}
+                    value={formState.equipment}
+                    placeholder={messages.equipmentPlaceholder}
+                    onChange={(event) => updateFormField("equipment", event.currentTarget.value)}
+                  />
+                </label>
+
+                <label className={styles.field}>
+                  <span className={styles.label}>{messages.notesLabel}</span>
+                  <textarea
+                    className={styles.textarea}
+                    value={formState.notes}
+                    placeholder={messages.notesPlaceholder}
+                    onChange={(event) => updateFormField("notes", event.currentTarget.value)}
+                  />
+                </label>
+
+                <div className={styles.formActions}>
+                  <button className={styles.button({ variant: "primary" })} type="submit">
+                    <Check className={styles.icon} aria-hidden="true" />
+                    <span>{isEditing ? messages.saveEditAction : messages.saveCreateAction}</span>
+                  </button>
+                  <Dialog.Close asChild>
+                    <button className={styles.button({ variant: "secondary" })} type="button">
+                      {messages.cancelAction}
+                    </button>
+                  </Dialog.Close>
+                </div>
+              </form>
+            </Dialog.Content>
           </div>
-
-          <label className={styles.field}>
-            <span className={styles.label}>{messages.nameLabel}</span>
-            <input
-              className={styles.input}
-              value={formState.name}
-              placeholder={messages.namePlaceholder}
-              onChange={(event) => updateFormField("name", event.currentTarget.value)}
-            />
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.label}>{messages.muscleGroupsLabel}</span>
-            <input
-              className={styles.input}
-              value={formState.muscleGroups}
-              placeholder={messages.muscleGroupsPlaceholder}
-              onChange={(event) => updateFormField("muscleGroups", event.currentTarget.value)}
-            />
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.label}>{messages.equipmentLabel}</span>
-            <input
-              className={styles.input}
-              value={formState.equipment}
-              placeholder={messages.equipmentPlaceholder}
-              onChange={(event) => updateFormField("equipment", event.currentTarget.value)}
-            />
-          </label>
-
-          <label className={styles.field}>
-            <span className={styles.label}>{messages.notesLabel}</span>
-            <textarea
-              className={styles.textarea}
-              value={formState.notes}
-              placeholder={messages.notesPlaceholder}
-              onChange={(event) => updateFormField("notes", event.currentTarget.value)}
-            />
-          </label>
-
-          <div className={styles.formActions}>
-            <button className={styles.button({ variant: "primary" })} type="submit">
-              <Check className={styles.icon} aria-hidden="true" />
-              <span>{isEditing ? messages.saveEditAction : messages.saveCreateAction}</span>
-            </button>
-            <button
-              className={styles.button({ variant: "secondary" })}
-              type="button"
-              onClick={closeForm}
-            >
-              {messages.cancelAction}
-            </button>
-          </div>
-        </form>
-      ) : null}
+        </Dialog.Portal>
+      </Dialog.Root>
 
       {loadState === "ready" && exercises.length === 0 ? (
         <div className={styles.emptyState}>

@@ -8,7 +8,12 @@ export {
 } from "./database";
 export type { LiftLogDatabase } from "./database";
 export { createEntityId, createIsoDateTime } from "./persistence-utils";
-export { createExerciseRepository, exerciseRepository } from "./repositories";
+export {
+  createExerciseRepository,
+  createWorkoutTemplateRepository,
+  exerciseRepository,
+  workoutTemplateRepository,
+} from "./repositories";
 export type {
   ActiveRestTimer,
   ActiveWorkout,
@@ -26,7 +31,11 @@ export type {
 } from "./entities";
 export type {
   CreateExerciseInput,
+  CreateWorkoutTemplateInput,
   ExerciseRepository,
   ExerciseRepositoryOptions,
   UpdateExerciseInput,
+  UpdateWorkoutTemplateInput,
+  WorkoutTemplateRepository,
+  WorkoutTemplateRepositoryOptions,
 } from "./repositories";

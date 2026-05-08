@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",
+    "@radix-ui/react-dialog": "^1.1.15",
     "dexie": "^4.4.2",
     "lucide-react": "^1.14.0",
     "react": "^19.2.5",

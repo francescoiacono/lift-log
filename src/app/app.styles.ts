@@ -1,9 +1,82 @@
-import { css } from "styled-system/css";
+import { css, cva } from "styled-system/css";
 
 export const styles = {
   shell: css({
     boxSizing: "border-box",
     minBlockSize: "100svh",
+    paddingBlockEnd: { base: "calc(76px + env(safe-area-inset-bottom))", md: "0" },
     backgroundColor: "bg",
+  }),
+  navigation: css({
+    position: { base: "fixed", md: "sticky" },
+    insetBlockStart: { md: "0" },
+    insetBlockEnd: { base: "0", md: "auto" },
+    insetInline: { base: "0", md: "auto" },
+    zIndex: "20",
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: "8px",
+    inlineSize: "100%",
+    maxInlineSize: { base: "none", md: "960px" },
+    marginInline: "auto",
+    paddingBlockStart: { base: "8px", md: "12px" },
+    paddingBlockEnd: { base: "calc(8px + env(safe-area-inset-bottom))", md: "8px" },
+    paddingInline: { base: "16px", sm: "24px" },
+    backgroundColor: "bg",
+    borderBlockStartWidth: { base: "1px", md: "0" },
+    borderInlineWidth: "0",
+    borderStyle: "solid",
+    borderColor: "lineMuted",
+    boxShadow: { base: "0 -18px 40px rgba(0, 0, 0, 0.32)", md: "none" },
+  }),
+  navigationButton: cva({
+    base: {
+      minBlockSize: { base: "52px", md: "44px" },
+      display: "inline-flex",
+      flexDirection: { base: "column", sm: "row" },
+      alignItems: "center",
+      justifyContent: "center",
+      gap: { base: "4px", sm: "8px" },
+      paddingBlock: { base: "8px", md: "10px" },
+      paddingInline: "12px",
+      borderBlockWidth: "1px",
+      borderInlineWidth: "1px",
+      borderStyle: "solid",
+      borderStartStartRadius: "8px",
+      borderStartEndRadius: "8px",
+      borderEndStartRadius: "8px",
+      borderEndEndRadius: "8px",
+      cursor: "pointer",
+      fontSize: { base: "12px", sm: "14px" },
+      fontWeight: "800",
+      lineHeight: "1",
+      transition: "background-color 120ms ease, border-color 120ms ease, color 120ms ease",
+    },
+    variants: {
+      selected: {
+        true: {
+          backgroundColor: "accent",
+          borderColor: "accent",
+          color: "bg",
+        },
+        false: {
+          backgroundColor: "card",
+          borderColor: "lineMuted",
+          color: "fgMuted",
+          _hover: {
+            backgroundColor: "cardElevated",
+            color: "fg",
+          },
+        },
+      },
+    },
+    defaultVariants: {
+      selected: false,
+    },
+  }),
+  navigationIcon: css({
+    inlineSize: "18px",
+    blockSize: "18px",
+    flexShrink: "0",
   }),
 };

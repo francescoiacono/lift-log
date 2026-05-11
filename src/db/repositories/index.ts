@@ -3,6 +3,10 @@ export {
   createWorkoutTemplateRepository,
   workoutTemplateRepository,
 } from "./workout-templates-repository";
+export {
+  createWorkoutSessionRepository,
+  workoutSessionRepository,
+} from "./workout-sessions-repository";
 export type {
   CreateExerciseInput,
   ExerciseRepository,
@@ -15,3 +19,11 @@ export type {
   WorkoutTemplateRepository,
   WorkoutTemplateRepositoryOptions,
 } from "./workout-templates-repository";
+export type {
+  ActiveWorkoutSnapshot,
+  LogWorkoutSetInput,
+  StartEmptyWorkoutInput,
+  UpdateWorkoutSetInput,
+  WorkoutSessionRepository,
+  WorkoutSessionRepositoryOptions,
+} from "./workout-sessions-repository";

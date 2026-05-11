@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Check, CirclePlus, ClipboardList, Pencil, X } from "lucide-react";
+import { Check, CirclePlus, ClipboardList, Pencil, Play, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { styles } from "./workout-template-library.styles";
@@ -9,9 +9,10 @@ import type {
   ExerciseRepository,
   WorkoutTemplate,
   WorkoutTemplateExercise,
+  WorkoutSessionRepository,
   WorkoutTemplateRepository,
 } from "@/db";
-import { exerciseRepository, workoutTemplateRepository } from "@/db";
+import { exerciseRepository, workoutSessionRepository, workoutTemplateRepository } from "@/db";
 import type { Messages } from "@/i18n";
 
 /** Message dictionary used by the workout template feature. */
@@ -27,6 +28,12 @@ export type WorkoutTemplateLibraryProps = {
 
   /** Repository used to read selectable exercise records. */
   exerciseStore?: ExerciseRepository;
+
+  /** Repository used to start active workout sessions from templates. */
+  sessionRepository?: WorkoutSessionRepository;
+
+  /** Called after a workout session has been started. */
+  onSessionStarted?: () => void;
 };
 
 /** Editable exercise planning state for a template entry. */
@@ -162,6 +169,8 @@ export const WorkoutTemplateLibrary = ({
   messages,
   templateRepository = workoutTemplateRepository,
   exerciseStore = exerciseRepository,
+  sessionRepository = workoutSessionRepository,
+  onSessionStarted,
 }: WorkoutTemplateLibraryProps) => {
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
@@ -170,6 +179,7 @@ export const WorkoutTemplateLibrary = ({
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingTemplateId, setEditingTemplateId] = useState<EntityId | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [startingTemplateId, setStartingTemplateId] = useState<EntityId | null>(null);
 
   const editingTemplate = useMemo(() => {
     return templates.find((template) => template.id === editingTemplateId);
@@ -341,6 +351,34 @@ export const WorkoutTemplateLibrary = ({
       closeForm();
     } catch {
       setFeedbackMessage(messages.saveError);
+    }
+  };
+
+  /** Starts an active workout from an existing workout template. */
+  const startTemplateWorkout = async (templateId: EntityId) => {
+    setStartingTemplateId(templateId);
+    setFeedbackMessage(null);
+
+    try {
+      const existingWorkout = await sessionRepository.getActive();
+
+      if (existingWorkout) {
+        setFeedbackMessage(messages.activeWorkoutExists);
+        return;
+      }
+
+      const activeWorkout = await sessionRepository.startFromTemplate(templateId);
+
+      if (!activeWorkout || activeWorkout.session.templateId !== templateId) {
+        setFeedbackMessage(messages.startError);
+        return;
+      }
+
+      onSessionStarted?.();
+    } catch {
+      setFeedbackMessage(messages.startError);
+    } finally {
+      setStartingTemplateId(null);
     }
   };
 
@@ -565,6 +603,23 @@ export const WorkoutTemplateLibrary = ({
               </div>
 
               <div className={styles.cardActions}>
+                <button
+                  aria-label={formatTemplateActionLabel(
+                    messages.startTemplateAriaLabel,
+                    template.name,
+                  )}
+                  className={styles.button({ variant: "primary" })}
+                  type="button"
+                  disabled={startingTemplateId === template.id}
+                  onClick={() => void startTemplateWorkout(template.id)}
+                >
+                  <Play className={styles.icon} aria-hidden="true" />
+                  <span>
+                    {startingTemplateId === template.id
+                      ? messages.startingAction
+                      : messages.startAction}
+                  </span>
+                </button>
                 <button
                   aria-label={formatTemplateActionLabel(
                     messages.editTemplateAriaLabel,

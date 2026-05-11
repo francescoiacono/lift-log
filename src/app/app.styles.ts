@@ -14,7 +14,7 @@ export const styles = {
     insetInline: { base: "0", md: "auto" },
     zIndex: "20",
     display: "grid",
-    gridTemplateColumns: "1fr 1fr",
+    gridTemplateColumns: "1fr 1fr 1fr",
     gap: "8px",
     inlineSize: "100%",
     maxInlineSize: { base: "none", md: "960px" },

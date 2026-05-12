@@ -1,5 +1,6 @@
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Check, CirclePlus, ClipboardList, Pencil, Play, X } from "lucide-react";
+import { Check, CirclePlus, ClipboardList, Pencil, Play, Trash2, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { styles } from "./workout-template-library.styles";
@@ -178,6 +179,7 @@ export const WorkoutTemplateLibrary = ({
   const [formState, setFormState] = useState<TemplateFormState>(createEmptyFormState);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingTemplateId, setEditingTemplateId] = useState<EntityId | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<EntityId | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const [startingTemplateId, setStartingTemplateId] = useState<EntityId | null>(null);
 
@@ -229,6 +231,7 @@ export const WorkoutTemplateLibrary = ({
 
     setFormState(createEmptyFormState());
     setEditingTemplateId(null);
+    setPendingDeleteId(null);
     setFeedbackMessage(null);
     setIsFormOpen(true);
   };
@@ -237,6 +240,7 @@ export const WorkoutTemplateLibrary = ({
   const openEditForm = (template: WorkoutTemplate) => {
     setFormState(toFormState(template));
     setEditingTemplateId(template.id);
+    setPendingDeleteId(null);
     setFeedbackMessage(null);
     setIsFormOpen(true);
   };
@@ -351,6 +355,23 @@ export const WorkoutTemplateLibrary = ({
       closeForm();
     } catch {
       setFeedbackMessage(messages.saveError);
+    }
+  };
+
+  /** Updates the controlled delete dialog state for a workout template row. */
+  const updateDeleteDialog = (isOpen: boolean, templateId: EntityId) => {
+    setPendingDeleteId(isOpen ? templateId : null);
+    setFeedbackMessage(null);
+  };
+
+  /** Deletes the confirmed workout template. */
+  const confirmDelete = async (templateId: EntityId) => {
+    try {
+      await templateRepository.deleteById(templateId);
+      setPendingDeleteId(null);
+      await refreshData();
+    } catch {
+      setFeedbackMessage(messages.deleteError);
     }
   };
 
@@ -631,6 +652,58 @@ export const WorkoutTemplateLibrary = ({
                 >
                   <Pencil className={styles.icon} aria-hidden="true" />
                 </button>
+                <AlertDialog.Root
+                  open={pendingDeleteId === template.id}
+                  onOpenChange={(isOpen) => updateDeleteDialog(isOpen, template.id)}
+                >
+                  <AlertDialog.Trigger asChild>
+                    <button
+                      aria-label={formatTemplateActionLabel(
+                        messages.deleteTemplateAriaLabel,
+                        template.name,
+                      )}
+                      className={styles.iconButton({ variant: "danger" })}
+                      type="button"
+                    >
+                      <Trash2 className={styles.icon} aria-hidden="true" />
+                    </button>
+                  </AlertDialog.Trigger>
+
+                  <AlertDialog.Portal>
+                    <AlertDialog.Overlay className={styles.dialogOverlay} />
+                    <div className={styles.dialogViewport}>
+                      <AlertDialog.Content className={styles.dialogContent}>
+                        <AlertDialog.Title className={styles.dialogTitle}>
+                          {messages.deleteConfirmTitle}
+                        </AlertDialog.Title>
+                        <AlertDialog.Description className={styles.dialogDescription}>
+                          <strong>{template.name}</strong>
+                          <span>{messages.deleteConfirmDescription}</span>
+                        </AlertDialog.Description>
+                        <div className={styles.dialogActions}>
+                          <AlertDialog.Action asChild>
+                            <button
+                              className={styles.button({ variant: "danger" })}
+                              type="button"
+                              onClick={() => void confirmDelete(template.id)}
+                            >
+                              <Trash2 className={styles.icon} aria-hidden="true" />
+                              <span>{messages.deleteConfirmAction}</span>
+                            </button>
+                          </AlertDialog.Action>
+                          <AlertDialog.Cancel asChild>
+                            <button
+                              className={styles.button({ variant: "secondary" })}
+                              type="button"
+                            >
+                              {messages.deleteCancelAction}
+                            </button>
+                          </AlertDialog.Cancel>
+                        </div>
+                      </AlertDialog.Content>
+                    </div>
+                  </AlertDialog.Portal>
+                </AlertDialog.Root>
               </div>
             </li>
           ))}

@@ -1,14 +1,15 @@
-import { ClipboardList, Dumbbell, Timer } from "lucide-react";
+import { ClipboardList, Dumbbell, History, Timer } from "lucide-react";
 import { useState } from "react";
 
 import { styles } from "./app.styles";
 import { ExerciseLibrary } from "@/features/exercises";
+import { WorkoutHistory } from "@/features/history";
 import { ActiveWorkoutScreen } from "@/features/sessions";
 import { WorkoutTemplateLibrary } from "@/features/workouts";
 import { defaultLocale, getMessages, type Locale } from "@/i18n";
 
 /** App-level screens currently available in the local-first MVP shell. */
-type AppView = "exercises" | "sessions" | "workouts";
+type AppView = "exercises" | "history" | "sessions" | "workouts";
 
 /** Props for the root application component. */
 type AppProps = {
@@ -41,6 +42,14 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           <span>{messages.app.workoutsNav}</span>
         </button>
         <button
+          className={styles.navigationButton({ selected: activeView === "history" })}
+          type="button"
+          onClick={() => setActiveView("history")}
+        >
+          <History className={styles.navigationIcon} aria-hidden="true" />
+          <span>{messages.app.historyNav}</span>
+        </button>
+        <button
           className={styles.navigationButton({ selected: activeView === "exercises" })}
           type="button"
           onClick={() => setActiveView("exercises")}
@@ -57,6 +66,7 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           onSessionStarted={() => setActiveView("sessions")}
         />
       ) : null}
+      {activeView === "history" ? <WorkoutHistory messages={messages.history} /> : null}
       {activeView === "sessions" ? (
         <ActiveWorkoutScreen
           messages={messages.sessions}

@@ -7,6 +7,15 @@ export const styles = {
     paddingBlockEnd: { base: "calc(76px + env(safe-area-inset-bottom))", md: "0" },
     backgroundColor: "bg",
   }),
+  globalActions: css({
+    position: "fixed",
+    insetBlockEnd: { base: "calc(92px + env(safe-area-inset-bottom))", md: "24px" },
+    insetInlineEnd: {
+      base: "16px",
+      md: "max(24px, calc((100vi - 960px) / 2 + 24px))",
+    },
+    zIndex: "25",
+  }),
   navigation: css({
     position: { base: "fixed", md: "sticky" },
     insetBlockStart: { md: "0" },

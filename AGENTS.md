@@ -91,6 +91,7 @@ Technical direction:
 - Put workout template UI, state, helpers, and tests under `src/features/workouts/`.
 - Put active session UI, state, helpers, and tests under `src/features/sessions/`.
 - Put rest timer UI, state, helpers, and tests under `src/features/timer/`.
+- Put app settings, preferences, and local data management UI under `src/features/settings/`.
 - Put database schema, Dexie setup, repositories, and migrations under `src/db/`.
 - Use Dexie with typed string IDs and ISO timestamp strings for local-first persisted records.
 - Keep IndexedDB schema changes versioned in `src/db/database.ts`; add migrations instead of mutating existing schema versions once data may exist.

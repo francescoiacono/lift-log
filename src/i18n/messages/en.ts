@@ -120,6 +120,24 @@ export const enMessages = {
     expandWorkoutAriaLabel: "Open workout: {name}",
     collapseWorkoutAriaLabel: "Close workout: {name}",
   },
+  settings: {
+    openLabel: "Open settings",
+    title: "Settings",
+    description: "Manage app preferences and data stored on this device.",
+    closeAction: "Close settings",
+    dataTitle: "Local data",
+    dataDescription:
+      "Your exercises, plans, workout history, active workout, and timers are stored on this device.",
+    resetAction: "Reset local data",
+    resetConfirmTitle: "Reset all local data?",
+    resetConfirmDescription:
+      "This deletes every exercise, workout plan, saved workout, active workout, rest timer, and app setting on this device. This cannot be undone.",
+    resetConfirmAction: "Reset data",
+    resettingAction: "Resetting",
+    cancelAction: "Cancel",
+    resetSuccess: "Local data was reset.",
+    resetError: "Local data could not be reset.",
+  },
   sessions: {
     eyebrow: "Workout",
     title: "Active workout",

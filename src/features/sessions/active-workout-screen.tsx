@@ -38,6 +38,9 @@ export type ActiveWorkoutScreenProps = {
   /** Localized copy used by the active workout UI. */
   messages: ActiveWorkoutMessages;
 
+  /** Initial feedback shown when the screen is mounted after an app-level event. */
+  initialFeedbackMessage?: string | null;
+
   /** Repository used to persist workout sessions. */
   repository?: WorkoutSessionRepository;
 
@@ -52,6 +55,9 @@ export type ActiveWorkoutScreenProps = {
 
   /** Called when the user needs to create exercises before training. */
   onOpenExercises?: () => void;
+
+  /** Called after the initial feedback message has been copied into local UI state. */
+  onInitialFeedbackShown?: () => void;
 };
 
 /** Async loading states used by the active workout screen. */
@@ -378,18 +384,20 @@ const toOptionalNonNegativeNumber = (value: string): number | null | undefined =
 /** Mobile-first screen for the current active workout session. */
 export const ActiveWorkoutScreen = ({
   messages,
+  initialFeedbackMessage = null,
   repository = workoutSessionRepository,
   templateRepository = workoutTemplateRepository,
   exerciseStore = exerciseRepository,
   onOpenPlans,
   onOpenExercises,
+  onInitialFeedbackShown,
 }: ActiveWorkoutScreenProps) => {
   const [snapshot, setSnapshot] = useState<ActiveWorkoutSnapshot | undefined>();
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
   const [recentSessions, setRecentSessions] = useState<WorkoutSession[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
-  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(initialFeedbackMessage);
   const [isStartingEmpty, setIsStartingEmpty] = useState(false);
   const [startingTemplateId, setStartingTemplateId] = useState<EntityId | null>(null);
   const [isFinishing, setIsFinishing] = useState(false);
@@ -476,6 +484,12 @@ export const ActiveWorkoutScreen = ({
   useEffect(() => {
     void refreshData();
   }, [refreshData]);
+
+  useEffect(() => {
+    if (initialFeedbackMessage) {
+      onInitialFeedbackShown?.();
+    }
+  }, [initialFeedbackMessage, onInitialFeedbackShown]);
 
   useEffect(() => {
     if (!activeSession) {

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { styles } from "./app.styles";
 import { ExerciseLibrary } from "@/features/exercises";
 import { WorkoutHistory } from "@/features/history";
+import { LocalDataSettings } from "@/features/settings";
 import { ActiveWorkoutScreen } from "@/features/sessions";
 import { WorkoutTemplateLibrary } from "@/features/workouts";
 import { defaultLocale, getMessages, type Locale } from "@/i18n";
@@ -21,9 +22,22 @@ type AppProps = {
 export const App = ({ locale = defaultLocale }: AppProps) => {
   const messages = getMessages(locale);
   const [activeView, setActiveView] = useState<AppView>("sessions");
+  const [dataResetVersion, setDataResetVersion] = useState(0);
+  const [initialWorkoutFeedback, setInitialWorkoutFeedback] = useState<string | null>(null);
+
+  /** Moves the app back to a fresh workout start state after local data is reset. */
+  const handleLocalDataReset = () => {
+    setInitialWorkoutFeedback(messages.settings.resetSuccess);
+    setDataResetVersion((currentVersion) => currentVersion + 1);
+    setActiveView("sessions");
+  };
 
   return (
     <main className={styles.shell}>
+      <div className={styles.globalActions}>
+        <LocalDataSettings messages={messages.settings} onDataReset={handleLocalDataReset} />
+      </div>
+
       <nav className={styles.navigation} aria-label={messages.app.navigationLabel}>
         <button
           className={styles.navigationButton({ selected: activeView === "sessions" })}
@@ -69,7 +83,10 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
       {activeView === "history" ? <WorkoutHistory messages={messages.history} /> : null}
       {activeView === "sessions" ? (
         <ActiveWorkoutScreen
+          key={dataResetVersion}
+          initialFeedbackMessage={initialWorkoutFeedback}
           messages={messages.sessions}
+          onInitialFeedbackShown={() => setInitialWorkoutFeedback(null)}
           onOpenExercises={() => setActiveView("exercises")}
           onOpenPlans={() => setActiveView("workouts")}
         />

@@ -10,9 +10,11 @@ export type { LiftLogDatabase } from "./database";
 export { createEntityId, createIsoDateTime } from "./persistence-utils";
 export {
   createExerciseRepository,
+  createLocalDataRepository,
   createWorkoutSessionRepository,
   createWorkoutTemplateRepository,
   exerciseRepository,
+  localDataRepository,
   workoutSessionRepository,
   workoutTemplateRepository,
 } from "./repositories";
@@ -36,6 +38,8 @@ export type {
   CreateWorkoutTemplateInput,
   ExerciseRepository,
   ExerciseRepositoryOptions,
+  LocalDataRepository,
+  LocalDataRepositoryOptions,
   ActiveWorkoutSnapshot,
   LogWorkoutSetInput,
   StartEmptyWorkoutInput,

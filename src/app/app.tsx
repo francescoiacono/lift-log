@@ -19,18 +19,18 @@ type AppProps = {
 /** Root application component. */
 export const App = ({ locale = defaultLocale }: AppProps) => {
   const messages = getMessages(locale);
-  const [activeView, setActiveView] = useState<AppView>("exercises");
+  const [activeView, setActiveView] = useState<AppView>("sessions");
 
   return (
     <main className={styles.shell}>
       <nav className={styles.navigation} aria-label={messages.app.navigationLabel}>
         <button
-          className={styles.navigationButton({ selected: activeView === "exercises" })}
+          className={styles.navigationButton({ selected: activeView === "sessions" })}
           type="button"
-          onClick={() => setActiveView("exercises")}
+          onClick={() => setActiveView("sessions")}
         >
-          <Dumbbell className={styles.navigationIcon} aria-hidden="true" />
-          <span>{messages.app.exercisesNav}</span>
+          <Timer className={styles.navigationIcon} aria-hidden="true" />
+          <span>{messages.app.sessionsNav}</span>
         </button>
         <button
           className={styles.navigationButton({ selected: activeView === "workouts" })}
@@ -41,12 +41,12 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           <span>{messages.app.workoutsNav}</span>
         </button>
         <button
-          className={styles.navigationButton({ selected: activeView === "sessions" })}
+          className={styles.navigationButton({ selected: activeView === "exercises" })}
           type="button"
-          onClick={() => setActiveView("sessions")}
+          onClick={() => setActiveView("exercises")}
         >
-          <Timer className={styles.navigationIcon} aria-hidden="true" />
-          <span>{messages.app.sessionsNav}</span>
+          <Dumbbell className={styles.navigationIcon} aria-hidden="true" />
+          <span>{messages.app.exercisesNav}</span>
         </button>
       </nav>
 
@@ -57,7 +57,13 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           onSessionStarted={() => setActiveView("sessions")}
         />
       ) : null}
-      {activeView === "sessions" ? <ActiveWorkoutScreen messages={messages.sessions} /> : null}
+      {activeView === "sessions" ? (
+        <ActiveWorkoutScreen
+          messages={messages.sessions}
+          onOpenExercises={() => setActiveView("exercises")}
+          onOpenPlans={() => setActiveView("workouts")}
+        />
+      ) : null}
     </main>
   );
 };

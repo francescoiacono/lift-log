@@ -4,8 +4,10 @@ import {
   CheckCircle2,
   ChevronDown,
   CirclePlus,
+  ClipboardList,
   Dumbbell,
   MoreVertical,
+  Play,
   Trash2,
   X,
 } from "lucide-react";
@@ -19,10 +21,13 @@ import type {
   Exercise,
   ExerciseRepository,
   WorkoutSet,
+  WorkoutSession,
   WorkoutSessionExercise,
   WorkoutSessionRepository,
+  WorkoutTemplate,
+  WorkoutTemplateRepository,
 } from "@/db";
-import { exerciseRepository, workoutSessionRepository } from "@/db";
+import { exerciseRepository, workoutSessionRepository, workoutTemplateRepository } from "@/db";
 import type { Messages } from "@/i18n";
 
 /** Message dictionary used by the active workout feature. */
@@ -36,8 +41,17 @@ export type ActiveWorkoutScreenProps = {
   /** Repository used to persist workout sessions. */
   repository?: WorkoutSessionRepository;
 
+  /** Repository used to read workout plans for quick starts. */
+  templateRepository?: WorkoutTemplateRepository;
+
   /** Repository used to read exercise names for session entries. */
   exerciseStore?: ExerciseRepository;
+
+  /** Called when the user wants to manage reusable workout plans. */
+  onOpenPlans?: () => void;
+
+  /** Called when the user needs to create exercises before training. */
+  onOpenExercises?: () => void;
 };
 
 /** Async loading states used by the active workout screen. */
@@ -136,6 +150,36 @@ const formatStartedAt = (startedAt: string, messages: ActiveWorkoutMessages): st
   return messages.startedAt.replace("{time}", startedTime);
 };
 
+/** Formats a finished workout timestamp for recent history. */
+const formatFinishedAt = (finishedAt: string | null, startedAt: string): string => {
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "short",
+  }).format(new Date(finishedAt ?? startedAt));
+};
+
+/** Formats a workout duration in minutes. */
+const formatWorkoutDuration = (
+  startedAt: string,
+  finishedAt: string | null,
+  messages: ActiveWorkoutMessages,
+): string => {
+  if (!finishedAt) {
+    return messages.durationMinutePlural.replace("{count}", "0");
+  }
+
+  const durationMinutes = Math.max(
+    1,
+    Math.round((new Date(finishedAt).getTime() - new Date(startedAt).getTime()) / 60_000),
+  );
+
+  return durationMinutes === 1
+    ? messages.durationMinuteSingular
+    : messages.durationMinutePlural.replace("{count}", String(durationMinutes));
+};
+
 /** Formats the exercise count label shown in the header. */
 const formatExerciseCount = (count: number, messages: ActiveWorkoutMessages): string => {
   return count === 1
@@ -152,6 +196,85 @@ const formatSetCount = (count: number, messages: ActiveWorkoutMessages): string 
   return count === 1
     ? messages.setCountSingular
     : formatCountMessage(messages.setCountPlural, count);
+};
+
+/** Formats completed set progress against a planned set target. */
+const formatSetProgress = (
+  completedSets: number,
+  targetSets: number | null | undefined,
+  messages: ActiveWorkoutMessages,
+): string => {
+  if (!targetSets) {
+    return formatSetCount(completedSets, messages);
+  }
+
+  return messages.setProgress
+    .replace("{completed}", String(completedSets))
+    .replace("{target}", String(targetSets));
+};
+
+/** Formats the planned rest target for an active workout exercise. */
+const formatRestTarget = (
+  restSeconds: number | null | undefined,
+  messages: ActiveWorkoutMessages,
+): string | null => {
+  if (!restSeconds) {
+    return null;
+  }
+
+  return messages.restTarget.replace("{seconds}", String(restSeconds));
+};
+
+/** Formats exercise progress and rest target metadata. */
+const formatExerciseMeta = (
+  sessionExercise: WorkoutSessionExercise,
+  messages: ActiveWorkoutMessages,
+): string => {
+  const restTarget = formatRestTarget(sessionExercise.restSeconds, messages);
+  const setProgress = formatSetProgress(
+    sessionExercise.sets.length,
+    sessionExercise.targetSets,
+    messages,
+  );
+
+  return restTarget ? `${setProgress} · ${restTarget}` : setProgress;
+};
+
+/** Counts all sets logged in a workout session. */
+const countWorkoutSets = (session: WorkoutSession): number => {
+  return session.exercises.reduce((totalSets, exercise) => totalSets + exercise.sets.length, 0);
+};
+
+/** Formats a recent workout history summary. */
+const formatWorkoutHistoryMeta = (
+  session: WorkoutSession,
+  messages: ActiveWorkoutMessages,
+): string => {
+  return messages.historyMeta
+    .replace("{date}", formatFinishedAt(session.finishedAt, session.startedAt))
+    .replace("{duration}", formatWorkoutDuration(session.startedAt, session.finishedAt, messages))
+    .replace("{sets}", formatSetCount(countWorkoutSets(session), messages));
+};
+
+/** Formats a plan card exercise count. */
+const formatTemplateExerciseCount = (count: number, messages: ActiveWorkoutMessages): string => {
+  return count === 1
+    ? messages.exerciseCountSingular
+    : formatCountMessage(messages.exerciseCountPlural, count);
+};
+
+/** Formats a compact exercise-name preview for a workout plan. */
+const formatTemplateExercisePreview = (
+  template: WorkoutTemplate,
+  exerciseById: Map<EntityId, Exercise>,
+  messages: ActiveWorkoutMessages,
+): string => {
+  const exerciseNames = [...template.exercises]
+    .sort((firstExercise, secondExercise) => firstExercise.order - secondExercise.order)
+    .map((templateExercise) => exerciseById.get(templateExercise.exerciseId)?.name)
+    .filter((exerciseName): exerciseName is string => Boolean(exerciseName));
+
+  return exerciseNames.length > 0 ? exerciseNames.join(", ") : messages.missingExercise;
 };
 
 /** Formats a completed set into a compact workout log summary. */
@@ -176,6 +299,11 @@ const formatExerciseToggleLabel = (template: string, exerciseName: string): stri
   return template.replace("{name}", exerciseName);
 };
 
+/** Formats a plan action label with the target plan name. */
+const formatTemplateActionLabel = (template: string, templateName: string): string => {
+  return template.replace("{name}", templateName);
+};
+
 /** Formats a set action label with the target set and exercise names. */
 const formatSetActionLabel = (template: string, set: WorkoutSet, exerciseName: string): string => {
   return template.replace("{number}", String(set.order + 1)).replace("{exercise}", exerciseName);
@@ -191,6 +319,14 @@ const sortSessionExercises = (exercises: WorkoutSessionExercise[]): WorkoutSessi
 /** Sorts persisted workout sets by their display order. */
 const sortWorkoutSets = (sets: WorkoutSet[]): WorkoutSet[] => {
   return [...sets].sort((firstSet, secondSet) => firstSet.order - secondSet.order);
+};
+
+/** Sorts workout sessions by newest start time first. */
+const sortWorkoutSessionsByStartedAt = (sessions: WorkoutSession[]): WorkoutSession[] => {
+  return [...sessions].sort(
+    (firstSession, secondSession) =>
+      new Date(secondSession.startedAt).getTime() - new Date(firstSession.startedAt).getTime(),
+  );
 };
 
 /** Parses a required positive integer from a controlled input value. */
@@ -243,14 +379,22 @@ const toOptionalNonNegativeNumber = (value: string): number | null | undefined =
 export const ActiveWorkoutScreen = ({
   messages,
   repository = workoutSessionRepository,
+  templateRepository = workoutTemplateRepository,
   exerciseStore = exerciseRepository,
+  onOpenPlans,
+  onOpenExercises,
 }: ActiveWorkoutScreenProps) => {
   const [snapshot, setSnapshot] = useState<ActiveWorkoutSnapshot | undefined>();
   const [exercises, setExercises] = useState<Exercise[]>([]);
+  const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
+  const [recentSessions, setRecentSessions] = useState<WorkoutSession[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [isStartingEmpty, setIsStartingEmpty] = useState(false);
+  const [startingTemplateId, setStartingTemplateId] = useState<EntityId | null>(null);
   const [isFinishing, setIsFinishing] = useState(false);
   const [isClearingTimer, setIsClearingTimer] = useState(false);
+  const [addingExerciseId, setAddingExerciseId] = useState<EntityId | null>(null);
   const [savingSetExerciseId, setSavingSetExerciseId] = useState<EntityId | null>(null);
   const [setDrafts, setSetDrafts] = useState<SetDraftsByExerciseId>({});
   const [openExerciseIds, setOpenExerciseIds] = useState<EntityId[]>([]);
@@ -258,6 +402,7 @@ export const ActiveWorkoutScreen = ({
   const [editingSetTarget, setEditingSetTarget] = useState<EditingSetTarget | null>(null);
   const [setEditDraft, setSetEditDraft] = useState<SetDraftState>(createEmptySetDraft);
   const [isSetDialogOpen, setIsSetDialogOpen] = useState(false);
+  const [isExerciseDialogOpen, setIsExerciseDialogOpen] = useState(false);
   const [isSavingSetEdit, setIsSavingSetEdit] = useState(false);
   const [isDeletingSet, setIsDeletingSet] = useState(false);
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
@@ -271,6 +416,14 @@ export const ActiveWorkoutScreen = ({
   const sessionExercises = useMemo(() => {
     return activeSession ? sortSessionExercises(activeSession.exercises) : [];
   }, [activeSession]);
+  const activeExerciseIds = useMemo(() => {
+    return new Set(sessionExercises.map((sessionExercise) => sessionExercise.exerciseId));
+  }, [sessionExercises]);
+  const availableExercises = useMemo(() => {
+    return exercises.filter((exercise) => !activeExerciseIds.has(exercise.id));
+  }, [activeExerciseIds, exercises]);
+  const canStartEmptyWorkout = exercises.length > 0;
+  const canAddExercise = activeSession !== undefined && availableExercises.length > 0;
   const remainingRestSeconds = activeRestTimer
     ? getRemainingRestSeconds(activeRestTimer, timerNowMs)
     : 0;
@@ -302,19 +455,23 @@ export const ActiveWorkoutScreen = ({
   /** Refreshes the active workout and exercise names from IndexedDB. */
   const refreshData = useCallback(async () => {
     try {
-      const [nextSnapshot, nextExercises] = await Promise.all([
+      const [nextSnapshot, nextExercises, nextTemplates, nextRecentSessions] = await Promise.all([
         repository.getActive(),
         exerciseStore.list(),
+        templateRepository.list(),
+        repository.listFinished(5),
       ]);
 
       setSnapshot(nextSnapshot);
       setExercises(nextExercises);
+      setTemplates(nextTemplates);
+      setRecentSessions(nextRecentSessions);
       setLoadState("ready");
     } catch {
       setLoadState("error");
       setFeedbackMessage(messages.loadError);
     }
-  }, [exerciseStore, messages.loadError, repository]);
+  }, [exerciseStore, messages.loadError, repository, templateRepository]);
 
   useEffect(() => {
     void refreshData();
@@ -363,11 +520,108 @@ export const ActiveWorkoutScreen = ({
       }
 
       setSnapshot(undefined);
+      setRecentSessions((currentSessions) =>
+        sortWorkoutSessionsByStartedAt([
+          finishedWorkout,
+          ...currentSessions.filter((session) => session.id !== finishedWorkout.id),
+        ]).slice(0, 5),
+      );
       setFeedbackMessage(messages.finishSuccess);
     } catch {
       setFeedbackMessage(messages.finishError);
     } finally {
       setIsFinishing(false);
+    }
+  };
+
+  /** Starts an empty ad-hoc workout session. */
+  const startEmptyWorkout = async () => {
+    if (!canStartEmptyWorkout) {
+      setFeedbackMessage(messages.noExerciseLibraryDescription);
+      return;
+    }
+
+    setIsStartingEmpty(true);
+    setFeedbackMessage(null);
+
+    try {
+      const nextSnapshot = await repository.startEmpty({ name: messages.emptyWorkoutName });
+
+      setSnapshot(nextSnapshot);
+      setIsExerciseDialogOpen(true);
+    } catch {
+      setFeedbackMessage(messages.startError);
+    } finally {
+      setIsStartingEmpty(false);
+    }
+  };
+
+  /** Starts an active workout from a saved plan. */
+  const startTemplateWorkout = async (templateId: EntityId) => {
+    setStartingTemplateId(templateId);
+    setFeedbackMessage(null);
+
+    try {
+      const nextSnapshot = await repository.startFromTemplate(templateId);
+
+      if (!nextSnapshot) {
+        setFeedbackMessage(messages.startError);
+        return;
+      }
+
+      setSnapshot(nextSnapshot);
+    } catch {
+      setFeedbackMessage(messages.startError);
+    } finally {
+      setStartingTemplateId(null);
+    }
+  };
+
+  /** Opens the active-workout exercise picker when an exercise can be added. */
+  const openExerciseDialog = () => {
+    if (!activeSession) {
+      setFeedbackMessage(messages.addExerciseError);
+      return;
+    }
+
+    if (availableExercises.length === 0) {
+      setFeedbackMessage(messages.noExercisesAvailable);
+      return;
+    }
+
+    setFeedbackMessage(null);
+    setIsExerciseDialogOpen(true);
+  };
+
+  /** Adds a selected exercise to the active workout. */
+  const addExerciseToWorkout = async (exerciseId: EntityId) => {
+    if (!activeSession) {
+      setFeedbackMessage(messages.addExerciseError);
+      return;
+    }
+
+    setAddingExerciseId(exerciseId);
+    setFeedbackMessage(null);
+
+    try {
+      const nextSnapshot = await repository.addExercise(activeSession.id, exerciseId);
+
+      if (!nextSnapshot) {
+        setFeedbackMessage(messages.addExerciseError);
+        return;
+      }
+
+      setSnapshot(nextSnapshot);
+      setOpenExerciseIds((currentOpenExerciseIds) =>
+        currentOpenExerciseIds.includes(exerciseId)
+          ? currentOpenExerciseIds
+          : [...currentOpenExerciseIds, exerciseId],
+      );
+      setIsExerciseDialogOpen(false);
+    } catch {
+      setFeedbackMessage(messages.addExerciseError);
+    } finally {
+      setAddingExerciseId(null);
     }
   };
 
@@ -448,17 +702,19 @@ export const ActiveWorkoutScreen = ({
     const draft = getSetDraft(setDrafts, sessionExercise.exerciseId);
     const reps = toPositiveInteger(draft.reps);
     const weight = toOptionalNonNegativeNumber(draft.weight);
-    const restSeconds = toOptionalNonNegativeInteger(draft.restSeconds);
+    const parsedRestSeconds = toOptionalNonNegativeInteger(draft.restSeconds);
 
     if (reps === undefined) {
       setFeedbackMessage(messages.validationRepsRequired);
       return;
     }
 
-    if (weight === undefined || restSeconds === undefined) {
+    if (weight === undefined || parsedRestSeconds === undefined) {
       setFeedbackMessage(messages.validationSetNumbers);
       return;
     }
+
+    const restSeconds = parsedRestSeconds ?? sessionExercise.restSeconds;
 
     setSavingSetExerciseId(sessionExercise.exerciseId);
     setFeedbackMessage(null);
@@ -636,11 +892,125 @@ export const ActiveWorkoutScreen = ({
       ) : null}
 
       {loadState === "ready" && !activeSession ? (
-        <div className={styles.emptyState}>
-          <Dumbbell className={styles.emptyIcon} aria-hidden="true" />
-          <h2 className={styles.emptyTitle}>{messages.noActiveTitle}</h2>
-          <p className={styles.emptyDescription}>{messages.noActiveDescription}</p>
-        </div>
+        <>
+          <div className={styles.emptyState}>
+            <Dumbbell className={styles.emptyIcon} aria-hidden="true" />
+            <h2 className={styles.emptyTitle}>{messages.noActiveTitle}</h2>
+            <p className={styles.emptyDescription}>
+              {canStartEmptyWorkout
+                ? messages.noActiveDescription
+                : messages.noExerciseLibraryDescription}
+            </p>
+            <div className={styles.emptyActions}>
+              <button
+                className={styles.button({ variant: "primary" })}
+                type="button"
+                disabled={!canStartEmptyWorkout || isStartingEmpty}
+                onClick={() => void startEmptyWorkout()}
+              >
+                <CirclePlus className={styles.icon} aria-hidden="true" />
+                <span>{isStartingEmpty ? messages.startingAction : messages.startEmptyAction}</span>
+              </button>
+              {!canStartEmptyWorkout && onOpenExercises ? (
+                <button
+                  className={styles.button({ variant: "secondary" })}
+                  type="button"
+                  onClick={onOpenExercises}
+                >
+                  <Dumbbell className={styles.icon} aria-hidden="true" />
+                  <span>{messages.addExercisesAction}</span>
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {canStartEmptyWorkout && templates.length > 0 ? (
+            <section className={styles.startPanel} aria-labelledby="start-from-plans-title">
+              <div className={styles.startPanelHeader}>
+                <h2 className={styles.sectionTitle} id="start-from-plans-title">
+                  {messages.startFromPlansTitle}
+                </h2>
+                {onOpenPlans ? (
+                  <button className={styles.textButton} type="button" onClick={onOpenPlans}>
+                    {messages.managePlansAction}
+                  </button>
+                ) : null}
+              </div>
+              <ul className={styles.planList}>
+                {templates.map((template) => (
+                  <li className={styles.planCard} key={template.id}>
+                    <div className={styles.planSummary}>
+                      <h3 className={styles.planName}>{template.name}</h3>
+                      <p className={styles.planMeta}>
+                        {formatTemplateExerciseCount(template.exercises.length, messages)}
+                      </p>
+                      <p className={styles.planPreview}>
+                        {formatTemplateExercisePreview(template, exerciseById, messages)}
+                      </p>
+                    </div>
+                    <button
+                      aria-label={formatTemplateActionLabel(
+                        messages.startPlanAriaLabel,
+                        template.name,
+                      )}
+                      className={styles.button({ variant: "primary" })}
+                      type="button"
+                      disabled={startingTemplateId === template.id}
+                      onClick={() => void startTemplateWorkout(template.id)}
+                    >
+                      <Play className={styles.icon} aria-hidden="true" />
+                      <span>
+                        {startingTemplateId === template.id
+                          ? messages.startingAction
+                          : messages.startPlanAction}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
+          {canStartEmptyWorkout && templates.length === 0 ? (
+            <div className={styles.emptyState}>
+              <ClipboardList className={styles.emptyIcon} aria-hidden="true" />
+              <h2 className={styles.emptyTitle}>{messages.noPlansTitle}</h2>
+              <p className={styles.emptyDescription}>{messages.noPlansDescription}</p>
+              {onOpenPlans ? (
+                <button
+                  className={styles.button({ variant: "secondary" })}
+                  type="button"
+                  onClick={onOpenPlans}
+                >
+                  <ClipboardList className={styles.icon} aria-hidden="true" />
+                  <span>{messages.managePlansAction}</span>
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {recentSessions.length > 0 ? (
+            <section className={styles.startPanel} aria-labelledby="recent-history-title">
+              <h2 className={styles.sectionTitle} id="recent-history-title">
+                {messages.historyTitle}
+              </h2>
+              <ul className={styles.planList}>
+                {recentSessions.map((session) => (
+                  <li className={styles.planCard} key={session.id}>
+                    <div className={styles.planSummary}>
+                      <h3 className={styles.planName}>
+                        {formatSessionTitle(session.name, messages)}
+                      </h3>
+                      <p className={styles.planMeta}>
+                        {formatWorkoutHistoryMeta(session, messages)}
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+        </>
       ) : null}
 
       {loadState === "ready" && activeSession ? (
@@ -659,15 +1029,26 @@ export const ActiveWorkoutScreen = ({
                 {formatExerciseCount(sessionExercises.length, messages)}
               </p>
             </div>
-            <button
-              className={styles.button({ variant: "secondary" })}
-              type="button"
-              disabled={isFinishing}
-              onClick={() => void finishWorkout()}
-            >
-              <CheckCircle2 className={styles.icon} aria-hidden="true" />
-              <span>{isFinishing ? messages.finishingAction : messages.finishAction}</span>
-            </button>
+            <div className={styles.sessionActions}>
+              <button
+                className={styles.button({ variant: "primary" })}
+                type="button"
+                disabled={!canAddExercise}
+                onClick={openExerciseDialog}
+              >
+                <CirclePlus className={styles.icon} aria-hidden="true" />
+                <span>{messages.addExerciseAction}</span>
+              </button>
+              <button
+                className={styles.button({ variant: "secondary" })}
+                type="button"
+                disabled={isFinishing}
+                onClick={() => void finishWorkout()}
+              >
+                <CheckCircle2 className={styles.icon} aria-hidden="true" />
+                <span>{isFinishing ? messages.finishingAction : messages.finishAction}</span>
+              </button>
+            </div>
           </div>
 
           {sessionExercises.length === 0 ? (
@@ -675,6 +1056,15 @@ export const ActiveWorkoutScreen = ({
               <Dumbbell className={styles.emptyIcon} aria-hidden="true" />
               <h3 className={styles.emptyTitle}>{messages.noExercisesTitle}</h3>
               <p className={styles.emptyDescription}>{messages.noExercisesDescription}</p>
+              <button
+                className={styles.button({ variant: "primary" })}
+                type="button"
+                disabled={!canAddExercise}
+                onClick={openExerciseDialog}
+              >
+                <CirclePlus className={styles.icon} aria-hidden="true" />
+                <span>{messages.addExerciseAction}</span>
+              </button>
             </div>
           ) : (
             <ul className={styles.exerciseList}>
@@ -703,7 +1093,7 @@ export const ActiveWorkoutScreen = ({
                       <span className={styles.exerciseHeading}>
                         <span className={styles.exerciseName}>{exerciseName}</span>
                         <span className={styles.exerciseMeta}>
-                          {formatSetCount(sessionExercise.sets.length, messages)}
+                          {formatExerciseMeta(sessionExercise, messages)}
                         </span>
                       </span>
                       <ChevronDown
@@ -789,7 +1179,9 @@ export const ActiveWorkoutScreen = ({
                                 inputMode="numeric"
                                 pattern="[0-9]*"
                                 value={setDraft.restSeconds}
-                                placeholder={messages.restSecondsPlaceholder}
+                                placeholder={String(
+                                  sessionExercise.restSeconds ?? messages.restSecondsPlaceholder,
+                                )}
                                 onChange={(event) =>
                                   updateSetDraft(
                                     sessionExercise.exerciseId,
@@ -859,6 +1251,62 @@ export const ActiveWorkoutScreen = ({
                   </button>
                 </>
               ) : null}
+            </Dialog.Content>
+          </div>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={isExerciseDialogOpen} onOpenChange={setIsExerciseDialogOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className={styles.dialogOverlay} />
+          <div className={styles.dialogViewport}>
+            <Dialog.Content className={styles.exerciseDialogContent}>
+              <div className={styles.formHeader}>
+                <div className={styles.formHeading}>
+                  <Dialog.Title className={styles.formTitle}>
+                    {messages.addExerciseTitle}
+                  </Dialog.Title>
+                  <Dialog.Description className={styles.formDescription}>
+                    {messages.addExerciseDescription}
+                  </Dialog.Description>
+                </div>
+                <Dialog.Close asChild>
+                  <button className={styles.iconButton({ variant: "ghost" })} type="button">
+                    <X className={styles.icon} aria-hidden="true" />
+                    <span className={styles.visuallyHidden}>{messages.cancelAction}</span>
+                  </button>
+                </Dialog.Close>
+              </div>
+
+              {availableExercises.length === 0 ? (
+                <p className={styles.emptyDescription}>{messages.noExercisesAvailable}</p>
+              ) : (
+                <ul className={styles.exercisePickerList}>
+                  {availableExercises.map((exercise) => (
+                    <li className={styles.exercisePickerItem} key={exercise.id}>
+                      <div className={styles.exerciseHeading}>
+                        <span className={styles.exerciseName}>{exercise.name}</span>
+                        <span className={styles.exerciseMeta}>
+                          {exercise.equipment ?? messages.noEquipment}
+                        </span>
+                      </div>
+                      <button
+                        className={styles.button({ variant: "secondary" })}
+                        type="button"
+                        disabled={addingExerciseId === exercise.id}
+                        onClick={() => void addExerciseToWorkout(exercise.id)}
+                      >
+                        <CirclePlus className={styles.icon} aria-hidden="true" />
+                        <span>
+                          {addingExerciseId === exercise.id
+                            ? messages.addingExerciseAction
+                            : messages.addExerciseAction}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Dialog.Content>
           </div>
         </Dialog.Portal>

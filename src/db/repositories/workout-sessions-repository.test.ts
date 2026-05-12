@@ -103,12 +103,16 @@ describe("createWorkoutSessionRepository", () => {
       {
         exerciseId: "exercise-a",
         order: 0,
+        targetSets: 4,
+        restSeconds: 120,
         sets: [],
         notes: null,
       },
       {
         exerciseId: "exercise-b",
         order: 1,
+        targetSets: 3,
+        restSeconds: 90,
         sets: [],
         notes: "Keep elbows tucked",
       },
@@ -153,6 +157,39 @@ describe("createWorkoutSessionRepository", () => {
 
     expect(templateWorkout?.session.id).toBe(emptyWorkout.session.id);
     await expect(database?.workoutSessions.count()).resolves.toBe(1);
+  });
+
+  it("adds an exercise to an empty active workout", async () => {
+    const repository = createWorkoutSessionRepository({
+      database: createTestDatabase(),
+      createId: createIdFactory(["session-1"]),
+      now: createTimestampFactory(["2026-05-07T11:00:00.000Z", "2026-05-07T11:02:00.000Z"]),
+    });
+
+    await database?.exercises.add({
+      id: "exercise-a",
+      name: "Bench press",
+      muscleGroups: ["chest"],
+      equipment: "Barbell",
+      notes: null,
+      createdAt: "2026-05-07T10:00:00.000Z",
+      updatedAt: "2026-05-07T10:00:00.000Z",
+    });
+    await repository.startEmpty({ name: "Current lift" });
+
+    const snapshot = await repository.addExercise("session-1", "exercise-a");
+
+    expect(snapshot?.session.exercises).toEqual([
+      {
+        exerciseId: "exercise-a",
+        order: 0,
+        targetSets: null,
+        restSeconds: null,
+        sets: [],
+        notes: null,
+      },
+    ]);
+    expect(snapshot?.activeWorkout.updatedAt).toBe("2026-05-07T11:02:00.000Z");
   });
 
   it("logs a completed set against an active workout exercise", async () => {
@@ -384,6 +421,57 @@ describe("createWorkoutSessionRepository", () => {
     await database?.workoutSessions.delete("session-1");
     await expect(repository.getActive()).resolves.toBeUndefined();
     await expect(database?.activeWorkout.get(activeWorkoutId)).resolves.toBeUndefined();
+  });
+
+  it("lists finished workout sessions newest first", async () => {
+    const repository = createWorkoutSessionRepository({
+      database: createTestDatabase(),
+    });
+
+    await database?.workoutSessions.bulkAdd([
+      {
+        id: "session-old",
+        templateId: null,
+        name: "Old lift",
+        status: "finished",
+        exercises: [],
+        notes: null,
+        startedAt: "2026-05-07T09:00:00.000Z",
+        finishedAt: "2026-05-07T09:30:00.000Z",
+        createdAt: "2026-05-07T09:00:00.000Z",
+        updatedAt: "2026-05-07T09:30:00.000Z",
+      },
+      {
+        id: "session-active",
+        templateId: null,
+        name: "Current lift",
+        status: "active",
+        exercises: [],
+        notes: null,
+        startedAt: "2026-05-07T10:00:00.000Z",
+        finishedAt: null,
+        createdAt: "2026-05-07T10:00:00.000Z",
+        updatedAt: "2026-05-07T10:00:00.000Z",
+      },
+      {
+        id: "session-new",
+        templateId: null,
+        name: "New lift",
+        status: "finished",
+        exercises: [],
+        notes: null,
+        startedAt: "2026-05-07T11:00:00.000Z",
+        finishedAt: "2026-05-07T11:45:00.000Z",
+        createdAt: "2026-05-07T11:00:00.000Z",
+        updatedAt: "2026-05-07T11:45:00.000Z",
+      },
+    ]);
+
+    await expect(repository.listFinished(1)).resolves.toMatchObject([
+      {
+        id: "session-new",
+      },
+    ]);
   });
 
   it("finishes the active workout and clears the active pointer", async () => {

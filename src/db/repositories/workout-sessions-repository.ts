@@ -80,11 +80,20 @@ export type WorkoutSessionRepository = {
   /** Returns the current active workout session, if one exists. */
   getActive: () => Promise<ActiveWorkoutSnapshot | undefined>;
 
+  /** Lists recently finished workout sessions. */
+  listFinished: (limit?: number) => Promise<WorkoutSession[]>;
+
   /** Starts an empty active workout session. */
   startEmpty: (input?: StartEmptyWorkoutInput) => Promise<ActiveWorkoutSnapshot>;
 
   /** Starts an active workout session from a saved workout template. */
   startFromTemplate: (templateId: EntityId) => Promise<ActiveWorkoutSnapshot | undefined>;
+
+  /** Adds an exercise to the current active workout session. */
+  addExercise: (
+    sessionId: EntityId,
+    exerciseId: EntityId,
+  ) => Promise<ActiveWorkoutSnapshot | undefined>;
 
   /** Logs a completed set against an exercise in an active workout session. */
   logSet: (
@@ -142,7 +151,9 @@ const createSessionExerciseBlocks = (
       exerciseId: exercise.exerciseId,
       notes: exercise.notes,
       order: index,
+      restSeconds: exercise.restSeconds,
       sets: [],
+      targetSets: exercise.targetSets,
     }));
 };
 
@@ -245,6 +256,22 @@ export const createWorkoutSessionRepository = ({
       return getActiveSnapshot(database);
     },
 
+    /** Lists recently finished workout sessions. */
+    listFinished: async (limit = 10) => {
+      const workoutSessions = await database.workoutSessions
+        .where("status")
+        .equals("finished")
+        .toArray();
+
+      return workoutSessions
+        .sort((firstSession, secondSession) => {
+          return (
+            new Date(secondSession.startedAt).getTime() - new Date(firstSession.startedAt).getTime()
+          );
+        })
+        .slice(0, limit);
+    },
+
     /** Starts an empty active workout session. */
     startEmpty: async (input = {}) => {
       return database.transaction(
@@ -320,6 +347,64 @@ export const createWorkoutSessionRepository = ({
           await database.activeWorkout.put(activeWorkout);
 
           return { activeWorkout, session: workoutSession };
+        },
+      );
+    },
+
+    /** Adds an exercise to the current active workout session. */
+    addExercise: async (sessionId, exerciseId) => {
+      return database.transaction(
+        "rw",
+        database.exercises,
+        database.workoutSessions,
+        database.activeWorkout,
+        async () => {
+          const activeWorkout = await getActiveSnapshot(database);
+
+          if (!activeWorkout || activeWorkout.session.id !== sessionId) {
+            return undefined;
+          }
+
+          const exerciseExists = await database.exercises.get(exerciseId);
+
+          if (!exerciseExists) {
+            return undefined;
+          }
+
+          if (
+            activeWorkout.session.exercises.some((exercise) => exercise.exerciseId === exerciseId)
+          ) {
+            return activeWorkout;
+          }
+
+          const timestamp = now();
+          const workoutSession: WorkoutSession = {
+            ...activeWorkout.session,
+            exercises: [
+              ...activeWorkout.session.exercises,
+              {
+                exerciseId,
+                notes: null,
+                order: activeWorkout.session.exercises.length,
+                restSeconds: null,
+                sets: [],
+                targetSets: null,
+              },
+            ],
+            updatedAt: timestamp,
+          };
+          const updatedActiveWorkout: ActiveWorkout = {
+            ...activeWorkout.activeWorkout,
+            updatedAt: timestamp,
+          };
+
+          await database.workoutSessions.put(workoutSession);
+          await database.activeWorkout.put(updatedActiveWorkout);
+
+          return {
+            activeWorkout: updatedActiveWorkout,
+            session: workoutSession,
+          };
         },
       );
     },

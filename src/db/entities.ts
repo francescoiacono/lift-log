@@ -108,6 +108,12 @@ export type WorkoutSessionExercise = {
   /** Zero-based display order inside the workout session. */
   order: number;
 
+  /** Planned number of sets copied into this session, when available. */
+  targetSets: number | null;
+
+  /** Planned rest duration copied into this session, when available. */
+  restSeconds: number | null;
+
   /** Sets logged for this exercise during the session. */
   sets: WorkoutSet[];
 

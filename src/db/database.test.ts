@@ -76,6 +76,8 @@ const workoutSession = {
     {
       exerciseId: exercise.id,
       order: 0,
+      targetSets: 3,
+      restSeconds: 120,
       sets: [
         {
           id: "set-1",
@@ -228,5 +230,55 @@ describe("createLiftLogDatabase", () => {
     const reopenedDatabase = createTestDatabase(databaseName);
 
     await expect(reopenedDatabase.exercises.get(exercise.id)).resolves.toEqual(exercise);
+  });
+
+  it("migrates workout session exercise plan fields from schema version 1", async () => {
+    const legacyName = createTestDatabaseName();
+    const legacyDatabase = new Dexie(legacyName);
+
+    databaseNames.add(legacyName);
+    legacyDatabase.version(1).stores({
+      exercises: "id, name, *muscleGroups, equipment, createdAt, updatedAt",
+      workoutTemplates: "id, name, createdAt, updatedAt",
+      workoutSessions: "id, status, templateId, startedAt, finishedAt, updatedAt",
+      settings: "id, updatedAt",
+      activeWorkout: "id, sessionId, updatedAt",
+    });
+
+    await legacyDatabase.open();
+    await legacyDatabase.table("workoutSessions").add({
+      id: "legacy-session",
+      templateId: workoutTemplate.id,
+      name: "Legacy Push",
+      status: "finished",
+      exercises: [
+        {
+          exerciseId: exercise.id,
+          order: 0,
+          sets: [],
+          notes: null,
+        },
+      ],
+      notes: null,
+      startedAt: timestamp,
+      finishedAt: "2026-05-07T11:00:00.000Z",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    legacyDatabase.close();
+
+    const migratedDatabase = createTestDatabase(legacyName);
+
+    await migratedDatabase.open();
+
+    await expect(migratedDatabase.workoutSessions.get("legacy-session")).resolves.toMatchObject({
+      exercises: [
+        {
+          exerciseId: exercise.id,
+          targetSets: null,
+          restSeconds: null,
+        },
+      ],
+    });
   });
 });

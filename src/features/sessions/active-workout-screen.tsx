@@ -3,17 +3,22 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   CirclePlus,
   ClipboardList,
   Dumbbell,
+  Flame,
+  History,
   MoreVertical,
-  Play,
-  RotateCcw,
+  Timer,
+  TrendingUp,
+  Trophy,
   Trash2,
   X,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
+import { calculateTrainingDayStreak } from "./active-workout-dashboard-metrics";
 import { styles } from "./active-workout-screen.styles";
 import type {
   ActiveRestTimer,
@@ -59,6 +64,9 @@ export type ActiveWorkoutScreenProps = {
 
   /** Called when the user needs to create exercises before training. */
   onOpenExercises?: () => void;
+
+  /** Called when the user wants to inspect saved workout history. */
+  onOpenHistory?: () => void;
 
   /** Called after the initial feedback message has been copied into local UI state. */
   onInitialFeedbackShown?: () => void;
@@ -160,36 +168,6 @@ const formatStartedAt = (startedAt: string, messages: ActiveWorkoutMessages): st
   return messages.startedAt.replace("{time}", startedTime);
 };
 
-/** Formats a finished workout timestamp for recent history. */
-const formatFinishedAt = (finishedAt: string | null, startedAt: string): string => {
-  return new Intl.DateTimeFormat(undefined, {
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "short",
-  }).format(new Date(finishedAt ?? startedAt));
-};
-
-/** Formats a workout duration in minutes. */
-const formatWorkoutDuration = (
-  startedAt: string,
-  finishedAt: string | null,
-  messages: ActiveWorkoutMessages,
-): string => {
-  if (!finishedAt) {
-    return messages.durationMinutePlural.replace("{count}", "0");
-  }
-
-  const durationMinutes = Math.max(
-    1,
-    Math.round((new Date(finishedAt).getTime() - new Date(startedAt).getTime()) / 60_000),
-  );
-
-  return durationMinutes === 1
-    ? messages.durationMinuteSingular
-    : messages.durationMinutePlural.replace("{count}", String(durationMinutes));
-};
-
 /** Formats the exercise count label shown in the header. */
 const formatExerciseCount = (count: number, messages: ActiveWorkoutMessages): string => {
   return count === 1
@@ -255,36 +233,52 @@ const countWorkoutSets = (session: WorkoutSession): number => {
   return session.exercises.reduce((totalSets, exercise) => totalSets + exercise.sets.length, 0);
 };
 
-/** Formats a recent workout history summary. */
-const formatWorkoutHistoryMeta = (
-  session: WorkoutSession,
-  messages: ActiveWorkoutMessages,
-): string => {
-  return messages.historyMeta
-    .replace("{date}", formatFinishedAt(session.finishedAt, session.startedAt))
-    .replace("{duration}", formatWorkoutDuration(session.startedAt, session.finishedAt, messages))
-    .replace("{sets}", formatSetCount(countWorkoutSets(session), messages));
+/** Calculates total logged training volume for a workout session. */
+const calculateWorkoutVolume = (session: WorkoutSession): number => {
+  return session.exercises.reduce((sessionVolume, exercise) => {
+    const exerciseVolume = exercise.sets.reduce((setVolume, set) => {
+      return setVolume + (set.weight ?? 0) * (set.reps ?? 0);
+    }, 0);
+
+    return sessionVolume + exerciseVolume;
+  }, 0);
 };
 
-/** Formats a plan card exercise count. */
-const formatTemplateExerciseCount = (count: number, messages: ActiveWorkoutMessages): string => {
-  return count === 1
-    ? messages.exerciseCountSingular
-    : formatCountMessage(messages.exerciseCountPlural, count);
+/** Returns whether a session started inside the current calendar week. */
+const isSessionFromCurrentWeek = (session: WorkoutSession, now = new Date()): boolean => {
+  const sessionDate = new Date(session.startedAt);
+  const weekStart = new Date(now);
+  const dayOffset = (weekStart.getDay() + 6) % 7;
+
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(weekStart.getDate() - dayOffset);
+
+  return sessionDate >= weekStart && sessionDate <= now;
 };
 
-/** Formats a compact exercise-name preview for a workout plan. */
-const formatTemplateExercisePreview = (
-  template: WorkoutTemplate,
-  exerciseById: Map<EntityId, Exercise>,
-  messages: ActiveWorkoutMessages,
-): string => {
-  const exerciseNames = [...template.exercises]
-    .sort((firstExercise, secondExercise) => firstExercise.order - secondExercise.order)
-    .map((templateExercise) => exerciseById.get(templateExercise.exerciseId)?.name)
-    .filter((exerciseName): exerciseName is string => Boolean(exerciseName));
+/** Formats a compact numeric stat for dashboard cards. */
+const formatDashboardNumber = (value: number): string => {
+  return new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 0,
+  }).format(value);
+};
 
-  return exerciseNames.length > 0 ? exerciseNames.join(", ") : messages.missingExercise;
+/** Calculates percent completion for the active workout card. */
+const calculateWorkoutCompletionPercent = (session: WorkoutSession | undefined): number => {
+  if (!session) {
+    return 0;
+  }
+
+  const completedSets = countWorkoutSets(session);
+  const targetSets = session.exercises.reduce((totalSets, exercise) => {
+    return totalSets + (exercise.targetSets ?? exercise.sets.length);
+  }, 0);
+
+  if (targetSets === 0) {
+    return completedSets > 0 ? 100 : 0;
+  }
+
+  return Math.min(100, Math.round((completedSets / targetSets) * 100));
 };
 
 /** Formats a completed set into a compact workout log summary. */
@@ -307,16 +301,6 @@ const formatLoggedSet = (set: WorkoutSet, messages: ActiveWorkoutMessages): stri
 /** Formats an exercise toggle label with the target exercise name. */
 const formatExerciseToggleLabel = (template: string, exerciseName: string): string => {
   return template.replace("{name}", exerciseName);
-};
-
-/** Formats a plan action label with the target plan name. */
-const formatTemplateActionLabel = (template: string, templateName: string): string => {
-  return template.replace("{name}", templateName);
-};
-
-/** Formats a saved workout action label with the target session name. */
-const formatSessionActionLabel = (template: string, sessionName: string): string => {
-  return template.replace("{name}", sessionName);
 };
 
 /** Formats a set action label with the target set and exercise names. */
@@ -419,17 +403,16 @@ export const ActiveWorkoutScreen = ({
   exerciseStore = exerciseRepository,
   onOpenPlans,
   onOpenExercises,
+  onOpenHistory,
   onInitialFeedbackShown,
 }: ActiveWorkoutScreenProps) => {
   const [snapshot, setSnapshot] = useState<ActiveWorkoutSnapshot | undefined>();
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
-  const [recentSessions, setRecentSessions] = useState<WorkoutSession[]>([]);
+  const [finishedSessions, setFinishedSessions] = useState<WorkoutSession[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(initialFeedbackMessage);
-  const [isStartingEmpty, setIsStartingEmpty] = useState(false);
-  const [startingTemplateId, setStartingTemplateId] = useState<EntityId | null>(null);
-  const [repeatingSessionId, setRepeatingSessionId] = useState<EntityId | null>(null);
+  const [isStartingWorkout, setIsStartingWorkout] = useState(false);
   const [isFinishing, setIsFinishing] = useState(false);
   const [isSavePlanDialogOpen, setIsSavePlanDialogOpen] = useState(false);
   const [savePlanName, setSavePlanName] = useState("");
@@ -467,6 +450,24 @@ export const ActiveWorkoutScreen = ({
   const canAddExercise = activeSession !== undefined && availableExercises.length > 0;
   const canSaveActiveWorkoutAsPlan =
     activeSession !== undefined && activeSession.templateId === null && sessionExercises.length > 0;
+  const weekSessions = useMemo(() => {
+    return finishedSessions.filter((session) => isSessionFromCurrentWeek(session));
+  }, [finishedSessions]);
+  const weekVolume = useMemo(() => {
+    return weekSessions.reduce(
+      (totalVolume, session) => totalVolume + calculateWorkoutVolume(session),
+      0,
+    );
+  }, [weekSessions]);
+  const trainingDayStreak = useMemo(() => {
+    return calculateTrainingDayStreak(finishedSessions);
+  }, [finishedSessions]);
+  const primaryTemplate = templates[0];
+  const dashboardWorkoutName =
+    activeSession?.name ?? primaryTemplate?.name ?? messages.dashboardWorkoutFallback;
+  const dashboardExerciseCount =
+    activeSession?.exercises.length ?? primaryTemplate?.exercises.length ?? 0;
+  const dashboardCompletionPercent = calculateWorkoutCompletionPercent(activeSession);
   const remainingRestSeconds = activeRestTimer
     ? getRemainingRestSeconds(activeRestTimer, timerNowMs)
     : 0;
@@ -498,17 +499,17 @@ export const ActiveWorkoutScreen = ({
   /** Refreshes the active workout and exercise names from IndexedDB. */
   const refreshData = useCallback(async () => {
     try {
-      const [nextSnapshot, nextExercises, nextTemplates, nextRecentSessions] = await Promise.all([
+      const [nextSnapshot, nextExercises, nextTemplates, nextFinishedSessions] = await Promise.all([
         repository.getActive(),
         exerciseStore.list(),
         templateRepository.list(),
-        repository.listFinished(5),
+        repository.listFinished(),
       ]);
 
       setSnapshot(nextSnapshot);
       setExercises(nextExercises);
       setTemplates(nextTemplates);
-      setRecentSessions(nextRecentSessions);
+      setFinishedSessions(nextFinishedSessions);
       setLoadState("ready");
     } catch {
       setLoadState("error");
@@ -585,11 +586,11 @@ export const ActiveWorkoutScreen = ({
       }
 
       setSnapshot(undefined);
-      setRecentSessions((currentSessions) =>
+      setFinishedSessions((currentSessions) =>
         sortWorkoutSessionsByStartedAt([
           finishedWorkout,
           ...currentSessions.filter((session) => session.id !== finishedWorkout.id),
-        ]).slice(0, 5),
+        ]),
       );
       setFeedbackMessage(messages.finishSuccess);
     } catch {
@@ -606,7 +607,7 @@ export const ActiveWorkoutScreen = ({
       return;
     }
 
-    setIsStartingEmpty(true);
+    setIsStartingWorkout(true);
     setFeedbackMessage(null);
 
     try {
@@ -617,13 +618,13 @@ export const ActiveWorkoutScreen = ({
     } catch {
       setFeedbackMessage(messages.startError);
     } finally {
-      setIsStartingEmpty(false);
+      setIsStartingWorkout(false);
     }
   };
 
   /** Starts an active workout from a saved plan. */
   const startTemplateWorkout = async (templateId: EntityId) => {
-    setStartingTemplateId(templateId);
+    setIsStartingWorkout(true);
     setFeedbackMessage(null);
 
     try {
@@ -638,34 +639,33 @@ export const ActiveWorkoutScreen = ({
     } catch {
       setFeedbackMessage(messages.startError);
     } finally {
-      setStartingTemplateId(null);
+      setIsStartingWorkout(false);
     }
   };
 
-  /** Starts a fresh active workout from a finished workout in recent history. */
-  const repeatFinishedWorkout = async (session: WorkoutSession) => {
-    if (session.exercises.length === 0) {
-      setFeedbackMessage(messages.repeatError);
+  /** Starts the best available workout from the dashboard card. */
+  const startDashboardWorkout = async () => {
+    if (activeSession) {
+      document.getElementById("active-session-panel")?.scrollIntoView({ block: "start" });
       return;
     }
 
-    setRepeatingSessionId(session.id);
-    setFeedbackMessage(null);
-
-    try {
-      const nextSnapshot = await repository.repeatFinished(session.id);
-
-      if (!nextSnapshot) {
-        setFeedbackMessage(messages.repeatError);
-        return;
-      }
-
-      setSnapshot(nextSnapshot);
-    } catch {
-      setFeedbackMessage(messages.repeatError);
-    } finally {
-      setRepeatingSessionId(null);
+    if (primaryTemplate) {
+      await startTemplateWorkout(primaryTemplate.id);
+      return;
     }
+
+    await startEmptyWorkout();
+  };
+
+  /** Shows lightweight feedback when no rest timer is currently running. */
+  const openRestTimerShortcut = () => {
+    if (activeRestTimer) {
+      setTimerNowMs(Date.now());
+      return;
+    }
+
+    setFeedbackMessage(messages.restTimerUnavailable);
   };
 
   /** Opens the active-workout exercise picker when an exercise can be added. */
@@ -1034,23 +1034,160 @@ export const ActiveWorkoutScreen = ({
 
   return (
     <section className={styles.root} aria-labelledby="active-workout-title">
-      <header className={styles.header}>
-        <div className={styles.headerText}>
-          <p className={styles.eyebrow}>{messages.eyebrow}</p>
-          <h1 className={styles.title} id="active-workout-title">
-            {messages.title}
+      <header className={styles.dashboardHeader}>
+        <div className={styles.dashboardGreeting}>
+          <h1 className={styles.dashboardTitle} id="active-workout-title">
+            {messages.greetingTitle}
           </h1>
-          <p className={styles.description}>{messages.description}</p>
-        </div>
-        <div className={styles.headerActions}>
-          <div className={styles.countBadge} aria-label={messages.totalLabel}>
-            <span className={styles.countValue}>{sessionExercises.length}</span>
-            <span className={styles.countLabel}>{messages.totalLabel}</span>
-          </div>
+          <p className={styles.dashboardSubtitle}>{messages.greetingSubtitle}</p>
         </div>
       </header>
 
       {feedbackMessage ? <p className={styles.feedback}>{feedbackMessage}</p> : null}
+
+      {loadState === "ready" ? (
+        <div className={styles.dashboard}>
+          <section className={styles.dashboardSection} aria-labelledby="today-workout-title">
+            <h2 className={styles.sectionTitle} id="today-workout-title">
+              {messages.todayWorkoutTitle}
+            </h2>
+            <button
+              className={styles.todayWorkoutCard}
+              type="button"
+              disabled={
+                isStartingWorkout || (!activeSession && !primaryTemplate && !canStartEmptyWorkout)
+              }
+              onClick={() => void startDashboardWorkout()}
+            >
+              <span className={styles.todayWorkoutIcon}>
+                <Dumbbell className={styles.todayWorkoutIconSvg} aria-hidden="true" />
+              </span>
+              <span className={styles.todayWorkoutText}>
+                <span className={styles.todayWorkoutName}>{dashboardWorkoutName}</span>
+                <span className={styles.todayWorkoutMeta}>
+                  {messages.dashboardWorkoutMeta.replace(
+                    "{exercises}",
+                    formatExerciseCount(dashboardExerciseCount, messages),
+                  )}
+                </span>
+              </span>
+              <ChevronRight className={styles.todayWorkoutChevron} aria-hidden="true" />
+              <span className={styles.progressTrack} aria-hidden="true">
+                <span
+                  className={styles.progressFill}
+                  style={{ inlineSize: `${dashboardCompletionPercent}%` }}
+                />
+              </span>
+              <span className={styles.progressLabel}>
+                {messages.dashboardCompletionLabel.replace(
+                  "{percent}",
+                  String(dashboardCompletionPercent),
+                )}
+              </span>
+            </button>
+          </section>
+
+          <section className={styles.dashboardSection} aria-labelledby="weekly-stats-title">
+            <div className={styles.sectionHeader}>
+              <h2 className={styles.sectionTitle} id="weekly-stats-title">
+                {messages.thisWeekTitle}
+              </h2>
+              {onOpenHistory ? (
+                <button className={styles.textButton} type="button" onClick={onOpenHistory}>
+                  {messages.viewAllAction}
+                </button>
+              ) : null}
+            </div>
+            <div className={styles.statGrid}>
+              <article className={styles.statCard}>
+                <TrendingUp className={styles.statIcon({ tone: "accent" })} aria-hidden="true" />
+                <strong className={styles.statValue}>
+                  {formatDashboardNumber(weekSessions.length)}
+                </strong>
+                <span className={styles.statLabel}>{messages.workoutsStatLabel}</span>
+              </article>
+              <article className={styles.statCard}>
+                <Dumbbell className={styles.statIcon({ tone: "blue" })} aria-hidden="true" />
+                <strong className={styles.statValue}>{formatDashboardNumber(weekVolume)}</strong>
+                <span className={styles.statLabel}>{messages.volumeStatLabel}</span>
+              </article>
+              <article className={styles.statCard}>
+                <Flame className={styles.statIcon({ tone: "orange" })} aria-hidden="true" />
+                <strong className={styles.statValue}>
+                  {formatDashboardNumber(trainingDayStreak)}
+                </strong>
+                <span className={styles.statLabel}>{messages.streakStatLabel}</span>
+              </article>
+            </div>
+          </section>
+
+          <section className={styles.dashboardSection} aria-labelledby="quick-access-title">
+            <h2 className={styles.sectionTitle} id="quick-access-title">
+              {messages.quickAccessTitle}
+            </h2>
+            <div className={styles.quickAccessGrid}>
+              {onOpenExercises ? (
+                <button
+                  className={styles.quickAccessButton}
+                  type="button"
+                  onClick={onOpenExercises}
+                >
+                  <Dumbbell
+                    className={styles.quickAccessIcon({ tone: "accent" })}
+                    aria-hidden="true"
+                  />
+                  <span>{messages.exercisesShortcut}</span>
+                </button>
+              ) : null}
+              {onOpenPlans ? (
+                <button className={styles.quickAccessButton} type="button" onClick={onOpenPlans}>
+                  <ClipboardList
+                    className={styles.quickAccessIcon({ tone: "blue" })}
+                    aria-hidden="true"
+                  />
+                  <span>{messages.templatesShortcut}</span>
+                </button>
+              ) : null}
+              {onOpenHistory ? (
+                <button className={styles.quickAccessButton} type="button" onClick={onOpenHistory}>
+                  <History
+                    className={styles.quickAccessIcon({ tone: "muted" })}
+                    aria-hidden="true"
+                  />
+                  <span>{messages.historyShortcut}</span>
+                </button>
+              ) : null}
+              <button
+                className={styles.quickAccessButton}
+                type="button"
+                onClick={openRestTimerShortcut}
+              >
+                <Timer className={styles.quickAccessIcon({ tone: "muted" })} aria-hidden="true" />
+                <span>{messages.restTimerShortcut}</span>
+              </button>
+            </div>
+          </section>
+
+          <button
+            className={styles.streakCard}
+            type="button"
+            onClick={onOpenHistory}
+            disabled={!onOpenHistory}
+          >
+            <Trophy className={styles.streakIcon} aria-hidden="true" />
+            <span className={styles.streakText}>
+              <span className={styles.streakTitle}>{messages.streakCardTitle}</span>
+              <span className={styles.streakDescription}>
+                {messages.streakCardDescription.replace(
+                  "{days}",
+                  formatDashboardNumber(trainingDayStreak),
+                )}
+              </span>
+            </span>
+            <ChevronRight className={styles.todayWorkoutChevron} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
 
       {loadState === "loading" ? (
         <div className={styles.emptyState}>
@@ -1060,147 +1197,9 @@ export const ActiveWorkoutScreen = ({
         </div>
       ) : null}
 
-      {loadState === "ready" && !activeSession ? (
-        <>
-          <div className={styles.emptyState}>
-            <Dumbbell className={styles.emptyIcon} aria-hidden="true" />
-            <h2 className={styles.emptyTitle}>{messages.noActiveTitle}</h2>
-            <p className={styles.emptyDescription}>
-              {canStartEmptyWorkout
-                ? messages.noActiveDescription
-                : messages.noExerciseLibraryDescription}
-            </p>
-            <div className={styles.emptyActions}>
-              <button
-                className={styles.button({ variant: "primary" })}
-                type="button"
-                disabled={!canStartEmptyWorkout || isStartingEmpty}
-                onClick={() => void startEmptyWorkout()}
-              >
-                <CirclePlus className={styles.icon} aria-hidden="true" />
-                <span>{isStartingEmpty ? messages.startingAction : messages.startEmptyAction}</span>
-              </button>
-              {!canStartEmptyWorkout && onOpenExercises ? (
-                <button
-                  className={styles.button({ variant: "secondary" })}
-                  type="button"
-                  onClick={onOpenExercises}
-                >
-                  <Dumbbell className={styles.icon} aria-hidden="true" />
-                  <span>{messages.addExercisesAction}</span>
-                </button>
-              ) : null}
-            </div>
-          </div>
-
-          {canStartEmptyWorkout && templates.length > 0 ? (
-            <section className={styles.startPanel} aria-labelledby="start-from-plans-title">
-              <div className={styles.startPanelHeader}>
-                <h2 className={styles.sectionTitle} id="start-from-plans-title">
-                  {messages.startFromPlansTitle}
-                </h2>
-                {onOpenPlans ? (
-                  <button className={styles.textButton} type="button" onClick={onOpenPlans}>
-                    {messages.managePlansAction}
-                  </button>
-                ) : null}
-              </div>
-              <ul className={styles.planList}>
-                {templates.map((template) => (
-                  <li className={styles.planCard} key={template.id}>
-                    <div className={styles.planSummary}>
-                      <h3 className={styles.planName}>{template.name}</h3>
-                      <p className={styles.planMeta}>
-                        {formatTemplateExerciseCount(template.exercises.length, messages)}
-                      </p>
-                      <p className={styles.planPreview}>
-                        {formatTemplateExercisePreview(template, exerciseById, messages)}
-                      </p>
-                    </div>
-                    <button
-                      aria-label={formatTemplateActionLabel(
-                        messages.startPlanAriaLabel,
-                        template.name,
-                      )}
-                      className={styles.button({ variant: "primary" })}
-                      type="button"
-                      disabled={startingTemplateId === template.id}
-                      onClick={() => void startTemplateWorkout(template.id)}
-                    >
-                      <Play className={styles.icon} aria-hidden="true" />
-                      <span>
-                        {startingTemplateId === template.id
-                          ? messages.startingAction
-                          : messages.startPlanAction}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-
-          {canStartEmptyWorkout && templates.length === 0 ? (
-            <div className={styles.emptyState}>
-              <ClipboardList className={styles.emptyIcon} aria-hidden="true" />
-              <h2 className={styles.emptyTitle}>{messages.noPlansTitle}</h2>
-              <p className={styles.emptyDescription}>{messages.noPlansDescription}</p>
-              {onOpenPlans ? (
-                <button
-                  className={styles.button({ variant: "secondary" })}
-                  type="button"
-                  onClick={onOpenPlans}
-                >
-                  <ClipboardList className={styles.icon} aria-hidden="true" />
-                  <span>{messages.managePlansAction}</span>
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-
-          {recentSessions.length > 0 ? (
-            <section className={styles.startPanel} aria-labelledby="recent-history-title">
-              <h2 className={styles.sectionTitle} id="recent-history-title">
-                {messages.historyTitle}
-              </h2>
-              <ul className={styles.planList}>
-                {recentSessions.map((session) => (
-                  <li className={styles.planCard} key={session.id}>
-                    <div className={styles.planSummary}>
-                      <h3 className={styles.planName}>
-                        {formatSessionTitle(session.name, messages)}
-                      </h3>
-                      <p className={styles.planMeta}>
-                        {formatWorkoutHistoryMeta(session, messages)}
-                      </p>
-                    </div>
-                    <button
-                      aria-label={formatSessionActionLabel(
-                        messages.repeatWorkoutAriaLabel,
-                        formatSessionTitle(session.name, messages),
-                      )}
-                      className={styles.button({ variant: "secondary" })}
-                      type="button"
-                      disabled={session.exercises.length === 0 || repeatingSessionId === session.id}
-                      onClick={() => void repeatFinishedWorkout(session)}
-                    >
-                      <RotateCcw className={styles.icon} aria-hidden="true" />
-                      <span>
-                        {repeatingSessionId === session.id
-                          ? messages.repeatingAction
-                          : messages.repeatAction}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-        </>
-      ) : null}
-
       {loadState === "ready" && activeSession ? (
         <article
+          id="active-session-panel"
           className={styles.sessionPanel}
           aria-label={formatSessionTitle(activeSession.name, messages)}
         >

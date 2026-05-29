@@ -1,4 +1,4 @@
-import { ClipboardList, Dumbbell, History, Timer } from "lucide-react";
+import { ClipboardList, Dumbbell, History, House } from "lucide-react";
 import { useState } from "react";
 
 import { styles } from "./app.styles";
@@ -48,16 +48,16 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           type="button"
           onClick={() => setActiveView("sessions")}
         >
-          <Timer className={styles.navigationIcon} aria-hidden="true" />
+          <House className={styles.navigationIcon} aria-hidden="true" />
           <span>{messages.app.sessionsNav}</span>
         </button>
         <button
-          className={styles.navigationButton({ selected: activeView === "workouts" })}
+          className={styles.navigationButton({ selected: activeView === "exercises" })}
           type="button"
-          onClick={() => setActiveView("workouts")}
+          onClick={() => setActiveView("exercises")}
         >
-          <ClipboardList className={styles.navigationIcon} aria-hidden="true" />
-          <span>{messages.app.workoutsNav}</span>
+          <Dumbbell className={styles.navigationIcon} aria-hidden="true" />
+          <span>{messages.app.exercisesNav}</span>
         </button>
         <button
           className={styles.navigationButton({ selected: activeView === "history" })}
@@ -68,12 +68,12 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           <span>{messages.app.historyNav}</span>
         </button>
         <button
-          className={styles.navigationButton({ selected: activeView === "exercises" })}
+          className={styles.navigationButton({ selected: activeView === "workouts" })}
           type="button"
-          onClick={() => setActiveView("exercises")}
+          onClick={() => setActiveView("workouts")}
         >
-          <Dumbbell className={styles.navigationIcon} aria-hidden="true" />
-          <span>{messages.app.exercisesNav}</span>
+          <ClipboardList className={styles.navigationIcon} aria-hidden="true" />
+          <span>{messages.app.workoutsNav}</span>
         </button>
       </nav>
 
@@ -82,6 +82,8 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           key={`exercises-${dataResetVersion}`}
           isActive={isExercisesActive}
           messages={messages.exercises}
+          onOpenHistory={() => setActiveView("history")}
+          onOpenWorkout={() => setActiveView("sessions")}
         />
       </div>
       <div hidden={!isWorkoutsActive}>
@@ -108,6 +110,7 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           messages={messages.sessions}
           onInitialFeedbackShown={() => setInitialWorkoutFeedback(null)}
           onOpenExercises={() => setActiveView("exercises")}
+          onOpenHistory={() => setActiveView("history")}
           onOpenPlans={() => setActiveView("workouts")}
         />
       </div>

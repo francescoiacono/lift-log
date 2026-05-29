@@ -1,5 +1,6 @@
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Check, ChevronDown, ClipboardList, History, RotateCcw, X } from "lucide-react";
+import { Check, ChevronDown, ClipboardList, History, RotateCcw, Trash2, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { styles } from "./workout-history.styles";
@@ -187,6 +188,8 @@ export const WorkoutHistory = ({
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const [repeatingSessionId, setRepeatingSessionId] = useState<EntityId | null>(null);
+  const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState<EntityId | null>(null);
+  const [deletingSessionId, setDeletingSessionId] = useState<EntityId | null>(null);
   const [planSourceSessionId, setPlanSourceSessionId] = useState<EntityId | null>(null);
   const [planName, setPlanName] = useState("");
   const [isSavingPlan, setIsSavingPlan] = useState(false);
@@ -244,7 +247,9 @@ export const WorkoutHistory = ({
     }
 
     setFeedbackMessage(null);
+    setDeletingSessionId(null);
     setIsSavingPlan(false);
+    setPendingDeleteSessionId(null);
     setPlanName("");
     setPlanSourceSessionId(null);
     setRepeatingSessionId(null);
@@ -316,6 +321,43 @@ export const WorkoutHistory = ({
     }
 
     closeSavePlanDialog();
+  };
+
+  /** Updates the controlled delete confirmation state for a saved workout. */
+  const updateDeleteDialog = (isOpen: boolean, sessionId: EntityId) => {
+    if (!isOpen && deletingSessionId === sessionId) {
+      return;
+    }
+
+    setPendingDeleteSessionId(isOpen ? sessionId : null);
+    setFeedbackMessage(null);
+  };
+
+  /** Deletes a finished workout from local history after confirmation. */
+  const deleteWorkout = async (session: WorkoutSession) => {
+    setDeletingSessionId(session.id);
+    setFeedbackMessage(null);
+
+    try {
+      const wasDeleted = await repository.deleteFinished(session.id);
+
+      if (!wasDeleted) {
+        setFeedbackMessage(messages.deleteError);
+        setPendingDeleteSessionId(null);
+        return;
+      }
+
+      setPendingDeleteSessionId(null);
+      setOpenSessionId((currentOpenSessionId) =>
+        currentOpenSessionId === session.id ? null : currentOpenSessionId,
+      );
+      await refreshData();
+    } catch {
+      setPendingDeleteSessionId(null);
+      setFeedbackMessage(messages.deleteError);
+    } finally {
+      setDeletingSessionId(null);
+    }
   };
 
   /** Saves the selected finished workout as a reusable workout plan. */
@@ -456,6 +498,69 @@ export const WorkoutHistory = ({
                         <ClipboardList className={styles.icon} aria-hidden="true" />
                         <span>{messages.saveAsPlanAction}</span>
                       </button>
+                      <AlertDialog.Root
+                        open={pendingDeleteSessionId === session.id}
+                        onOpenChange={(isOpen) => updateDeleteDialog(isOpen, session.id)}
+                      >
+                        <AlertDialog.Trigger asChild>
+                          <button
+                            aria-label={formatWorkoutActionLabel(
+                              messages.deleteWorkoutAriaLabel,
+                              sessionName,
+                            )}
+                            className={styles.button({ variant: "danger" })}
+                            type="button"
+                            disabled={deletingSessionId === session.id}
+                          >
+                            <Trash2 className={styles.icon} aria-hidden="true" />
+                            <span>
+                              {deletingSessionId === session.id
+                                ? messages.deletingAction
+                                : messages.deleteAction}
+                            </span>
+                          </button>
+                        </AlertDialog.Trigger>
+
+                        <AlertDialog.Portal>
+                          <AlertDialog.Overlay className={styles.dialogOverlay} />
+                          <div className={styles.dialogViewport}>
+                            <AlertDialog.Content className={styles.dialogContent}>
+                              <AlertDialog.Title className={styles.dialogTitle}>
+                                {messages.deleteConfirmTitle}
+                              </AlertDialog.Title>
+                              <AlertDialog.Description className={styles.dialogDescription}>
+                                <strong>{sessionName}</strong>
+                                <span>{messages.deleteConfirmDescription}</span>
+                              </AlertDialog.Description>
+                              <div className={styles.dialogActions}>
+                                <AlertDialog.Action asChild>
+                                  <button
+                                    className={styles.button({ variant: "danger" })}
+                                    type="button"
+                                    disabled={deletingSessionId === session.id}
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      void deleteWorkout(session);
+                                    }}
+                                  >
+                                    <Trash2 className={styles.icon} aria-hidden="true" />
+                                    <span>{messages.deleteConfirmAction}</span>
+                                  </button>
+                                </AlertDialog.Action>
+                                <AlertDialog.Cancel asChild>
+                                  <button
+                                    className={styles.button({ variant: "secondary" })}
+                                    type="button"
+                                    disabled={deletingSessionId === session.id}
+                                  >
+                                    {messages.deleteCancelAction}
+                                  </button>
+                                </AlertDialog.Cancel>
+                              </div>
+                            </AlertDialog.Content>
+                          </div>
+                        </AlertDialog.Portal>
+                      </AlertDialog.Root>
                     </div>
 
                     {sessionExercises.length === 0 ? (

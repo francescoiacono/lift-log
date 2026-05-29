@@ -747,11 +747,60 @@ describe("createWorkoutSessionRepository", () => {
       },
     ]);
 
+    await expect(repository.listFinished()).resolves.toMatchObject([
+      {
+        id: "session-new",
+      },
+      {
+        id: "session-old",
+      },
+    ]);
     await expect(repository.listFinished(1)).resolves.toMatchObject([
       {
         id: "session-new",
       },
     ]);
+  });
+
+  it("deletes a finished workout session", async () => {
+    const repository = createWorkoutSessionRepository({
+      database: createTestDatabase(),
+    });
+
+    await database?.workoutSessions.add({
+      id: "session-finished",
+      templateId: null,
+      name: "Finished lift",
+      status: "finished",
+      exercises: [],
+      notes: null,
+      startedAt: "2026-05-07T11:00:00.000Z",
+      finishedAt: "2026-05-07T11:30:00.000Z",
+      createdAt: "2026-05-07T11:00:00.000Z",
+      updatedAt: "2026-05-07T11:30:00.000Z",
+    });
+
+    await expect(repository.deleteFinished("session-finished")).resolves.toBe(true);
+    await expect(database?.workoutSessions.get("session-finished")).resolves.toBeUndefined();
+  });
+
+  it("does not delete an active workout through the finished history API", async () => {
+    const repository = createWorkoutSessionRepository({
+      database: createTestDatabase(),
+      createId: createIdFactory(["session-active"]),
+      now: createTimestampFactory(["2026-05-07T11:00:00.000Z"]),
+    });
+
+    await repository.startEmpty({ name: "Current lift" });
+
+    await expect(repository.deleteFinished("session-active")).resolves.toBe(false);
+    await expect(database?.workoutSessions.get("session-active")).resolves.toMatchObject({
+      id: "session-active",
+      status: "active",
+    });
+    await expect(database?.activeWorkout.get(activeWorkoutId)).resolves.toMatchObject({
+      sessionId: "session-active",
+    });
   });
 
   it("finishes the active workout and clears the active pointer", async () => {

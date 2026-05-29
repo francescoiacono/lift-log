@@ -102,8 +102,11 @@ export type WorkoutSessionRepository = {
   /** Returns the current active workout session, if one exists. */
   getActive: () => Promise<ActiveWorkoutSnapshot | undefined>;
 
-  /** Lists recently finished workout sessions. */
+  /** Lists finished workout sessions, optionally capped to a recent count. */
   listFinished: (limit?: number) => Promise<WorkoutSession[]>;
+
+  /** Deletes a finished workout session by id. */
+  deleteFinished: (sessionId: EntityId) => Promise<boolean>;
 
   /** Starts an empty active workout session. */
   startEmpty: (input?: StartEmptyWorkoutInput) => Promise<ActiveWorkoutSnapshot>;
@@ -317,20 +320,35 @@ export const createWorkoutSessionRepository = ({
       return getActiveSnapshot(database);
     },
 
-    /** Lists recently finished workout sessions. */
-    listFinished: async (limit = 10) => {
+    /** Lists finished workout sessions, optionally capped to a recent count. */
+    listFinished: async (limit) => {
       const workoutSessions = await database.workoutSessions
         .where("status")
         .equals("finished")
         .toArray();
 
-      return workoutSessions
-        .sort((firstSession, secondSession) => {
-          return (
-            new Date(secondSession.startedAt).getTime() - new Date(firstSession.startedAt).getTime()
-          );
-        })
-        .slice(0, limit);
+      const sortedWorkoutSessions = workoutSessions.sort((firstSession, secondSession) => {
+        return (
+          new Date(secondSession.startedAt).getTime() - new Date(firstSession.startedAt).getTime()
+        );
+      });
+
+      return limit === undefined ? sortedWorkoutSessions : sortedWorkoutSessions.slice(0, limit);
+    },
+
+    /** Deletes a finished workout session by id. */
+    deleteFinished: async (sessionId) => {
+      return database.transaction("rw", database.workoutSessions, async () => {
+        const workoutSession = await database.workoutSessions.get(sessionId);
+
+        if (!workoutSession || workoutSession.status !== "finished") {
+          return false;
+        }
+
+        await database.workoutSessions.delete(sessionId);
+
+        return true;
+      });
     },
 
     /** Starts an empty active workout session. */

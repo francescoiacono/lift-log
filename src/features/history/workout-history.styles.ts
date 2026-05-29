@@ -157,6 +157,14 @@ export const styles = {
             backgroundColor: "surfacePressed",
           },
         },
+        danger: {
+          backgroundColor: "dangerSoft",
+          borderColor: "danger",
+          color: "danger",
+          _hover: {
+            backgroundColor: "surfacePressed",
+          },
+        },
       },
     },
     defaultVariants: {
@@ -463,12 +471,29 @@ export const styles = {
     fontWeight: "800",
     lineHeight: "1.1",
   }),
+  dialogTitle: css({
+    marginBlock: "0",
+    marginInline: "0",
+    color: "danger",
+    fontSize: "20px",
+    fontWeight: "900",
+    lineHeight: "1.2",
+  }),
   formDescription: css({
     marginBlock: "0",
     marginInline: "0",
     color: "fgMuted",
     fontSize: "14px",
     lineHeight: "1.4",
+  }),
+  dialogDescription: css({
+    display: "grid",
+    gap: "4px",
+    marginBlock: "0",
+    marginInline: "0",
+    color: "fgMuted",
+    fontSize: "14px",
+    lineHeight: "1.45",
   }),
   field: css({
     display: "grid",
@@ -512,6 +537,12 @@ export const styles = {
     gridTemplateColumns: "1fr",
     flexWrap: "wrap",
     gap: "10px",
+  }),
+  dialogActions: css({
+    display: "flex",
+    flexWrap: "wrap",
+    justifyContent: "end",
+    gap: "8px",
   }),
   visuallyHidden: css({
     srOnly: true,

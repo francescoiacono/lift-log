@@ -233,6 +233,286 @@ describe("createWorkoutSessionRepository", () => {
     });
   });
 
+  it("starts an active workout by repeating a finished workout without copied sets", async () => {
+    const repository = createWorkoutSessionRepository({
+      database: createTestDatabase(),
+      createId: createIdFactory(["session-repeat"]),
+      now: createTimestampFactory(["2026-05-07T12:00:00.000Z"]),
+    });
+
+    await database?.workoutSessions.add({
+      id: "session-finished",
+      templateId: null,
+      name: "Upper body",
+      status: "finished",
+      exercises: [
+        {
+          exerciseId: "exercise-b",
+          order: 1,
+          targetSets: null,
+          restSeconds: null,
+          sets: [
+            {
+              id: "set-3",
+              order: 0,
+              reps: 10,
+              weight: 30,
+              weightUnit: "kg",
+              isCompleted: true,
+              completedAt: "2026-05-07T11:30:00.000Z",
+              restSeconds: 60,
+              notes: null,
+            },
+          ],
+          notes: "Keep controlled",
+        },
+        {
+          exerciseId: "exercise-a",
+          order: 0,
+          targetSets: 4,
+          restSeconds: 120,
+          sets: [
+            {
+              id: "set-1",
+              order: 0,
+              reps: 8,
+              weight: 80,
+              weightUnit: "kg",
+              isCompleted: true,
+              completedAt: "2026-05-07T11:08:00.000Z",
+              restSeconds: 120,
+              notes: null,
+            },
+            {
+              id: "set-2",
+              order: 1,
+              reps: 7,
+              weight: 80,
+              weightUnit: "kg",
+              isCompleted: true,
+              completedAt: "2026-05-07T11:11:00.000Z",
+              restSeconds: 90,
+              notes: null,
+            },
+          ],
+          notes: null,
+        },
+      ],
+      notes: "Felt strong",
+      startedAt: "2026-05-07T11:00:00.000Z",
+      finishedAt: "2026-05-07T11:45:00.000Z",
+      createdAt: "2026-05-07T11:00:00.000Z",
+      updatedAt: "2026-05-07T11:45:00.000Z",
+    });
+
+    const snapshot = await repository.repeatFinished("session-finished");
+
+    expect(snapshot?.session).toMatchObject({
+      id: "session-repeat",
+      templateId: null,
+      name: "Upper body",
+      status: "active",
+      startedAt: "2026-05-07T12:00:00.000Z",
+      finishedAt: null,
+    });
+    expect(snapshot?.session.exercises).toEqual([
+      {
+        exerciseId: "exercise-a",
+        order: 0,
+        targetSets: 4,
+        restSeconds: 120,
+        sets: [],
+        notes: null,
+      },
+      {
+        exerciseId: "exercise-b",
+        order: 1,
+        targetSets: 1,
+        restSeconds: 60,
+        sets: [],
+        notes: "Keep controlled",
+      },
+    ]);
+    await expect(database?.activeWorkout.get(activeWorkoutId)).resolves.toMatchObject({
+      id: activeWorkoutId,
+      sessionId: "session-repeat",
+    });
+  });
+
+  it("does not repeat a finished workout without exercises", async () => {
+    const repository = createWorkoutSessionRepository({
+      database: createTestDatabase(),
+    });
+
+    await database?.workoutSessions.add({
+      id: "session-empty",
+      templateId: null,
+      name: "Quick workout",
+      status: "finished",
+      exercises: [],
+      notes: null,
+      startedAt: "2026-05-07T11:00:00.000Z",
+      finishedAt: "2026-05-07T11:05:00.000Z",
+      createdAt: "2026-05-07T11:00:00.000Z",
+      updatedAt: "2026-05-07T11:05:00.000Z",
+    });
+
+    await expect(repository.repeatFinished("session-empty")).resolves.toBeUndefined();
+    await expect(database?.activeWorkout.count()).resolves.toBe(0);
+    await expect(database?.workoutSessions.count()).resolves.toBe(1);
+  });
+
+  it("saves an ad-hoc active workout as a template and links the session", async () => {
+    const repository = createWorkoutSessionRepository({
+      database: createTestDatabase(),
+      createId: createIdFactory(["session-1", "set-1", "template-1"]),
+      now: createTimestampFactory([
+        "2026-05-07T11:00:00.000Z",
+        "2026-05-07T11:01:00.000Z",
+        "2026-05-07T11:08:00.000Z",
+        "2026-05-07T11:09:00.000Z",
+      ]),
+    });
+
+    await database?.exercises.add({
+      id: "exercise-a",
+      name: "Bench press",
+      muscleGroups: ["chest"],
+      equipment: "Barbell",
+      notes: null,
+      createdAt: "2026-05-07T10:00:00.000Z",
+      updatedAt: "2026-05-07T10:00:00.000Z",
+    });
+    await repository.startEmpty({ name: "Quick workout" });
+    await repository.addExercise("session-1", "exercise-a");
+    await repository.logSet("session-1", "exercise-a", {
+      reps: 8,
+      restSeconds: 120,
+      weight: 80,
+    });
+
+    const result = await repository.createTemplateFromActive("session-1", {
+      name: "Upper body",
+    });
+
+    expect(result?.template).toEqual({
+      id: "template-1",
+      name: "Upper body",
+      exercises: [
+        {
+          exerciseId: "exercise-a",
+          order: 0,
+          targetSets: 1,
+          restSeconds: 120,
+          notes: null,
+        },
+      ],
+      createdAt: "2026-05-07T11:09:00.000Z",
+      updatedAt: "2026-05-07T11:09:00.000Z",
+    });
+    expect(result?.snapshot.session).toMatchObject({
+      id: "session-1",
+      templateId: "template-1",
+      name: "Upper body",
+      updatedAt: "2026-05-07T11:09:00.000Z",
+    });
+    expect(result?.snapshot.activeWorkout.updatedAt).toBe("2026-05-07T11:09:00.000Z");
+    await expect(database?.workoutTemplates.get("template-1")).resolves.toEqual(result?.template);
+    await expect(database?.workoutSessions.get("session-1")).resolves.toMatchObject({
+      templateId: "template-1",
+      name: "Upper body",
+    });
+  });
+
+  it("saves a finished workout as a template", async () => {
+    const repository = createWorkoutSessionRepository({
+      database: createTestDatabase(),
+      createId: createIdFactory(["template-1"]),
+      now: createTimestampFactory(["2026-05-07T12:00:00.000Z"]),
+    });
+
+    await database?.workoutSessions.add({
+      id: "session-finished",
+      templateId: null,
+      name: "Upper body",
+      status: "finished",
+      exercises: [
+        {
+          exerciseId: "exercise-a",
+          order: 0,
+          targetSets: null,
+          restSeconds: null,
+          sets: [
+            {
+              id: "set-1",
+              order: 0,
+              reps: 8,
+              weight: 80,
+              weightUnit: "kg",
+              isCompleted: true,
+              completedAt: "2026-05-07T11:08:00.000Z",
+              restSeconds: 120,
+              notes: null,
+            },
+            {
+              id: "set-2",
+              order: 1,
+              reps: 7,
+              weight: 80,
+              weightUnit: "kg",
+              isCompleted: true,
+              completedAt: "2026-05-07T11:11:00.000Z",
+              restSeconds: 90,
+              notes: null,
+            },
+          ],
+          notes: null,
+        },
+      ],
+      notes: null,
+      startedAt: "2026-05-07T11:00:00.000Z",
+      finishedAt: "2026-05-07T11:45:00.000Z",
+      createdAt: "2026-05-07T11:00:00.000Z",
+      updatedAt: "2026-05-07T11:45:00.000Z",
+    });
+
+    const workoutTemplate = await repository.createTemplateFromFinished("session-finished", {
+      name: "Upper plan",
+    });
+
+    expect(workoutTemplate).toEqual({
+      id: "template-1",
+      name: "Upper plan",
+      exercises: [
+        {
+          exerciseId: "exercise-a",
+          order: 0,
+          targetSets: 2,
+          restSeconds: 90,
+          notes: null,
+        },
+      ],
+      createdAt: "2026-05-07T12:00:00.000Z",
+      updatedAt: "2026-05-07T12:00:00.000Z",
+    });
+    await expect(database?.workoutTemplates.get("template-1")).resolves.toEqual(workoutTemplate);
+  });
+
+  it("does not save a template from an active workout without exercises", async () => {
+    const repository = createWorkoutSessionRepository({
+      database: createTestDatabase(),
+      createId: createIdFactory(["session-1"]),
+      now: createTimestampFactory(["2026-05-07T11:00:00.000Z"]),
+    });
+
+    await repository.startEmpty({ name: "Quick workout" });
+
+    await expect(
+      repository.createTemplateFromActive("session-1", { name: "Upper body" }),
+    ).resolves.toBeUndefined();
+    await expect(database?.workoutTemplates.count()).resolves.toBe(0);
+  });
+
   it("clears the active rest timer", async () => {
     const repository = createWorkoutSessionRepository({
       database: createTestDatabase(),

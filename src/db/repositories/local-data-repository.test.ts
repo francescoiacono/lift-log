@@ -6,10 +6,11 @@ import {
   activeWorkoutId,
   appSettingsId,
   createLiftLogDatabase,
+  databaseVersion,
   type LiftLogDatabase,
 } from "../database";
 import type { Exercise, WorkoutSession, WorkoutTemplate } from "../entities";
-import { createLocalDataRepository } from "./local-data-repository";
+import { createLocalDataRepository, localDataExportFormat } from "./local-data-repository";
 
 let database: LiftLogDatabase | undefined;
 let databaseIndex = 0;
@@ -59,6 +60,47 @@ afterEach(async () => {
 });
 
 describe("createLocalDataRepository", () => {
+  it("exports all local app data stores with metadata", async () => {
+    const testDatabase = createTestDatabase();
+    const repository = createLocalDataRepository({
+      database: testDatabase,
+      now: () => "2026-05-07T12:00:00.000Z",
+    });
+    const settings = {
+      id: appSettingsId,
+      weightUnit: "kg",
+      defaultRestSeconds: 120,
+      createdAt: "2026-05-07T10:00:00.000Z",
+      updatedAt: "2026-05-07T10:00:00.000Z",
+    } as const;
+    const activeWorkout = {
+      id: activeWorkoutId,
+      sessionId: workoutSession.id,
+      restTimer: null,
+      startedAt: "2026-05-07T10:00:00.000Z",
+      updatedAt: "2026-05-07T10:00:00.000Z",
+    } as const;
+
+    await Promise.all([
+      testDatabase.exercises.add(exercise),
+      testDatabase.workoutTemplates.add(workoutTemplate),
+      testDatabase.workoutSessions.add(workoutSession),
+      testDatabase.settings.add(settings),
+      testDatabase.activeWorkout.add(activeWorkout),
+    ]);
+
+    await expect(repository.exportData()).resolves.toEqual({
+      format: localDataExportFormat,
+      databaseVersion,
+      exportedAt: "2026-05-07T12:00:00.000Z",
+      exercises: [exercise],
+      workoutTemplates: [workoutTemplate],
+      workoutSessions: [workoutSession],
+      settings: [settings],
+      activeWorkout: [activeWorkout],
+    });
+  });
+
   it("clears all local app data stores", async () => {
     const testDatabase = createTestDatabase();
     const repository = createLocalDataRepository({ database: testDatabase });

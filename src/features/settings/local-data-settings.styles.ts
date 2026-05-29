@@ -209,6 +209,12 @@ export const styles = {
     display: "grid",
     gap: "6px",
   }),
+  sectionActions: css({
+    display: { base: "grid", sm: "flex" },
+    gridTemplateColumns: "1fr",
+    flexWrap: "wrap",
+    gap: "10px",
+  }),
   sectionTitle: css({
     marginBlock: "0",
     marginInline: "0",

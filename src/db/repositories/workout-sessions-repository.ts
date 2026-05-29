@@ -8,6 +8,7 @@ import type {
   WorkoutSet,
   WorkoutSession,
   WorkoutSessionExercise,
+  WorkoutTemplate,
   WorkoutTemplateExercise,
 } from "../entities";
 import { createEntityId, createIsoDateTime } from "../persistence-utils";
@@ -25,6 +26,27 @@ export type ActiveWorkoutSnapshot = {
 export type StartEmptyWorkoutInput = {
   /** Optional display name for the workout session. */
   name?: string | null;
+};
+
+/** Data used to save an ad-hoc active workout as a reusable template. */
+export type CreateActiveWorkoutTemplateInput = {
+  /** User-facing workout template name. */
+  name: string;
+};
+
+/** Data used to save a finished workout session as a reusable template. */
+export type CreateWorkoutTemplateFromSessionInput = {
+  /** User-facing workout template name. */
+  name: string;
+};
+
+/** Result of saving an ad-hoc active workout as a reusable template. */
+export type CreateActiveWorkoutTemplateResult = {
+  /** Updated active workout snapshot linked to the new template. */
+  snapshot: ActiveWorkoutSnapshot;
+
+  /** Newly created reusable workout template. */
+  template: WorkoutTemplate;
 };
 
 /** Data used to append a completed set to an active workout exercise. */
@@ -88,6 +110,21 @@ export type WorkoutSessionRepository = {
 
   /** Starts an active workout session from a saved workout template. */
   startFromTemplate: (templateId: EntityId) => Promise<ActiveWorkoutSnapshot | undefined>;
+
+  /** Starts an active workout session by repeating a finished workout session. */
+  repeatFinished: (sessionId: EntityId) => Promise<ActiveWorkoutSnapshot | undefined>;
+
+  /** Saves a finished workout session as a reusable template. */
+  createTemplateFromFinished: (
+    sessionId: EntityId,
+    input: CreateWorkoutTemplateFromSessionInput,
+  ) => Promise<WorkoutTemplate | undefined>;
+
+  /** Saves an ad-hoc active workout as a reusable template and links the session to it. */
+  createTemplateFromActive: (
+    sessionId: EntityId,
+    input: CreateActiveWorkoutTemplateInput,
+  ) => Promise<CreateActiveWorkoutTemplateResult | undefined>;
 
   /** Adds an exercise to the current active workout session. */
   addExercise: (
@@ -154,6 +191,30 @@ const createSessionExerciseBlocks = (
       restSeconds: exercise.restSeconds,
       sets: [],
       targetSets: exercise.targetSets,
+    }));
+};
+
+/** Returns the most recent logged rest duration for a session exercise, when available. */
+const getMostRecentLoggedRestSeconds = (sets: WorkoutSet[]): number | null => {
+  const mostRecentSetWithRest = [...sets]
+    .sort((firstSet, secondSet) => secondSet.order - firstSet.order)
+    .find((set) => set.restSeconds !== null);
+
+  return mostRecentSetWithRest?.restSeconds ?? null;
+};
+
+/** Converts active workout exercise blocks into reusable template exercise entries. */
+const createTemplateExerciseBlocks = (
+  exercises: WorkoutSessionExercise[],
+): WorkoutTemplateExercise[] => {
+  return [...exercises]
+    .sort((first, second) => first.order - second.order)
+    .map((exercise, index) => ({
+      exerciseId: exercise.exerciseId,
+      notes: exercise.notes,
+      order: index,
+      restSeconds: exercise.restSeconds ?? getMostRecentLoggedRestSeconds(exercise.sets),
+      targetSets: exercise.targetSets ?? (exercise.sets.length > 0 ? exercise.sets.length : null),
     }));
 };
 
@@ -347,6 +408,144 @@ export const createWorkoutSessionRepository = ({
           await database.activeWorkout.put(activeWorkout);
 
           return { activeWorkout, session: workoutSession };
+        },
+      );
+    },
+
+    /** Starts an active workout session by repeating a finished workout session. */
+    repeatFinished: async (sessionId) => {
+      return database.transaction(
+        "rw",
+        database.workoutSessions,
+        database.activeWorkout,
+        async () => {
+          const existingWorkout = await getActiveSnapshot(database);
+
+          if (existingWorkout) {
+            return existingWorkout;
+          }
+
+          const sourceWorkoutSession = await database.workoutSessions.get(sessionId);
+
+          if (
+            !sourceWorkoutSession ||
+            sourceWorkoutSession.status !== "finished" ||
+            sourceWorkoutSession.exercises.length === 0
+          ) {
+            return undefined;
+          }
+
+          const timestamp = now();
+          const workoutSession: WorkoutSession = {
+            id: createId(),
+            templateId: sourceWorkoutSession.templateId,
+            name: sourceWorkoutSession.name,
+            status: "active",
+            exercises: createSessionExerciseBlocks(
+              createTemplateExerciseBlocks(sourceWorkoutSession.exercises),
+            ),
+            notes: null,
+            startedAt: timestamp,
+            finishedAt: null,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          };
+          const activeWorkout = createActiveWorkout(workoutSession.id, timestamp);
+
+          await database.workoutSessions.add(workoutSession);
+          await database.activeWorkout.put(activeWorkout);
+
+          return { activeWorkout, session: workoutSession };
+        },
+      );
+    },
+
+    /** Saves a finished workout session as a reusable template. */
+    createTemplateFromFinished: async (sessionId, input) => {
+      return database.transaction(
+        "rw",
+        database.workoutTemplates,
+        database.workoutSessions,
+        async () => {
+          const sourceWorkoutSession = await database.workoutSessions.get(sessionId);
+          const name = normalizeSessionName(input.name);
+
+          if (
+            !sourceWorkoutSession ||
+            sourceWorkoutSession.status !== "finished" ||
+            sourceWorkoutSession.exercises.length === 0 ||
+            !name
+          ) {
+            return undefined;
+          }
+
+          const timestamp = now();
+          const workoutTemplate: WorkoutTemplate = {
+            id: createId(),
+            name,
+            exercises: createTemplateExerciseBlocks(sourceWorkoutSession.exercises),
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          };
+
+          await database.workoutTemplates.add(workoutTemplate);
+
+          return workoutTemplate;
+        },
+      );
+    },
+
+    /** Saves an ad-hoc active workout as a reusable template and links the session to it. */
+    createTemplateFromActive: async (sessionId, input) => {
+      return database.transaction(
+        "rw",
+        database.workoutTemplates,
+        database.workoutSessions,
+        database.activeWorkout,
+        async () => {
+          const activeWorkout = await getActiveSnapshot(database);
+          const name = normalizeSessionName(input.name);
+
+          if (
+            !activeWorkout ||
+            activeWorkout.session.id !== sessionId ||
+            activeWorkout.session.templateId !== null ||
+            activeWorkout.session.exercises.length === 0 ||
+            !name
+          ) {
+            return undefined;
+          }
+
+          const timestamp = now();
+          const workoutTemplate: WorkoutTemplate = {
+            id: createId(),
+            name,
+            exercises: createTemplateExerciseBlocks(activeWorkout.session.exercises),
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          };
+          const workoutSession: WorkoutSession = {
+            ...activeWorkout.session,
+            templateId: workoutTemplate.id,
+            name: workoutTemplate.name,
+            updatedAt: timestamp,
+          };
+          const updatedActiveWorkout: ActiveWorkout = {
+            ...activeWorkout.activeWorkout,
+            updatedAt: timestamp,
+          };
+
+          await database.workoutTemplates.add(workoutTemplate);
+          await database.workoutSessions.put(workoutSession);
+          await database.activeWorkout.put(updatedActiveWorkout);
+
+          return {
+            snapshot: {
+              activeWorkout: updatedActiveWorkout,
+              session: workoutSession,
+            },
+            template: workoutTemplate,
+          };
         },
       );
     },

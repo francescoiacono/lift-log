@@ -24,6 +24,9 @@ export type WorkoutTemplateLibraryProps = {
   /** Localized copy used by the workout template UI. */
   messages: WorkoutTemplateLibraryMessages;
 
+  /** Whether the workout template library is the currently visible app view. */
+  isActive?: boolean;
+
   /** Repository used to persist workout template records. */
   templateRepository?: WorkoutTemplateRepository;
 
@@ -168,6 +171,7 @@ const formatExercisePlan = (
 /** Root workout template feature with list, create, and edit flows. */
 export const WorkoutTemplateLibrary = ({
   messages,
+  isActive = true,
   templateRepository = workoutTemplateRepository,
   exerciseStore = exerciseRepository,
   sessionRepository = workoutSessionRepository,
@@ -219,8 +223,22 @@ export const WorkoutTemplateLibrary = ({
   }, [exerciseStore, messages.loadError, templateRepository]);
 
   useEffect(() => {
-    void refreshData();
-  }, [refreshData]);
+    if (isActive) {
+      void refreshData();
+    }
+  }, [isActive, refreshData]);
+
+  useEffect(() => {
+    if (isActive) {
+      return;
+    }
+
+    setFormState(createEmptyFormState());
+    setEditingTemplateId(null);
+    setPendingDeleteId(null);
+    setFeedbackMessage(null);
+    setIsFormOpen(false);
+  }, [isActive]);
 
   /** Opens the form in create mode. */
   const openCreateForm = () => {

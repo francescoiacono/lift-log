@@ -24,6 +24,10 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
   const [activeView, setActiveView] = useState<AppView>("sessions");
   const [dataResetVersion, setDataResetVersion] = useState(0);
   const [initialWorkoutFeedback, setInitialWorkoutFeedback] = useState<string | null>(null);
+  const isExercisesActive = activeView === "exercises";
+  const isHistoryActive = activeView === "history";
+  const isSessionsActive = activeView === "sessions";
+  const isWorkoutsActive = activeView === "workouts";
 
   /** Moves the app back to a fresh workout start state after local data is reset. */
   const handleLocalDataReset = () => {
@@ -73,24 +77,40 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
         </button>
       </nav>
 
-      {activeView === "exercises" ? <ExerciseLibrary messages={messages.exercises} /> : null}
-      {activeView === "workouts" ? (
+      <div hidden={!isExercisesActive}>
+        <ExerciseLibrary
+          key={`exercises-${dataResetVersion}`}
+          isActive={isExercisesActive}
+          messages={messages.exercises}
+        />
+      </div>
+      <div hidden={!isWorkoutsActive}>
         <WorkoutTemplateLibrary
+          key={`workouts-${dataResetVersion}`}
+          isActive={isWorkoutsActive}
           messages={messages.workouts}
           onSessionStarted={() => setActiveView("sessions")}
         />
-      ) : null}
-      {activeView === "history" ? <WorkoutHistory messages={messages.history} /> : null}
-      {activeView === "sessions" ? (
+      </div>
+      <div hidden={!isHistoryActive}>
+        <WorkoutHistory
+          key={`history-${dataResetVersion}`}
+          isActive={isHistoryActive}
+          messages={messages.history}
+          onSessionStarted={() => setActiveView("sessions")}
+        />
+      </div>
+      <div hidden={!isSessionsActive}>
         <ActiveWorkoutScreen
           key={dataResetVersion}
           initialFeedbackMessage={initialWorkoutFeedback}
+          isActive={isSessionsActive}
           messages={messages.sessions}
           onInitialFeedbackShown={() => setInitialWorkoutFeedback(null)}
           onOpenExercises={() => setActiveView("exercises")}
           onOpenPlans={() => setActiveView("workouts")}
         />
-      ) : null}
+      </div>
     </main>
   );
 };

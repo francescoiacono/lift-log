@@ -1,6 +1,6 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Settings, Trash2, X } from "lucide-react";
+import { Download, Settings, Trash2, X } from "lucide-react";
 import { useState } from "react";
 
 import { styles } from "./local-data-settings.styles";
@@ -10,6 +10,27 @@ import type { Messages } from "@/i18n";
 
 /** Message dictionary used by the settings feature. */
 type LocalDataSettingsMessages = Messages["settings"];
+
+/** Creates a filesystem-friendly export filename from an ISO timestamp. */
+const createExportFileName = (exportedAt: string): string => {
+  const safeTimestamp = exportedAt.replaceAll(":", "-").replaceAll(".", "-");
+
+  return `lift-log-export-${safeTimestamp}.json`;
+};
+
+/** Downloads a JSON-serializable value using a temporary object URL. */
+const downloadJsonFile = (fileName: string, data: unknown): void => {
+  const blob = new Blob([`${JSON.stringify(data, null, 2)}\n`], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+};
 
 /** Props for the local data settings dialog. */
 export type LocalDataSettingsProps = {
@@ -31,6 +52,7 @@ export const LocalDataSettings = ({
 }: LocalDataSettingsProps) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isResetOpen, setIsResetOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
 
@@ -48,6 +70,22 @@ export const LocalDataSettings = ({
   const updateResetDialog = (isOpen: boolean) => {
     setIsResetOpen(isOpen);
     setFeedbackMessage(null);
+  };
+
+  /** Exports all device-local app data as a downloaded JSON file. */
+  const exportLocalData = async () => {
+    setIsExporting(true);
+    setFeedbackMessage(null);
+
+    try {
+      const localDataExport = await repository.exportData();
+
+      downloadJsonFile(createExportFileName(localDataExport.exportedAt), localDataExport);
+    } catch {
+      setFeedbackMessage(messages.exportError);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   /** Deletes all device-local app data after confirmation. */
@@ -103,55 +141,73 @@ export const LocalDataSettings = ({
                 <p className={styles.sectionDescription}>{messages.dataDescription}</p>
               </div>
 
-              <AlertDialog.Root open={isResetOpen} onOpenChange={updateResetDialog}>
-                <AlertDialog.Trigger asChild>
-                  <button className={styles.button({ variant: "danger" })} type="button">
-                    <Trash2 className={styles.icon} aria-hidden="true" />
-                    <span>{messages.resetAction}</span>
-                  </button>
-                </AlertDialog.Trigger>
+              <div className={styles.sectionActions}>
+                <button
+                  className={styles.button({ variant: "secondary" })}
+                  type="button"
+                  disabled={isExporting || isResetting}
+                  onClick={() => void exportLocalData()}
+                >
+                  <Download className={styles.icon} aria-hidden="true" />
+                  <span>{isExporting ? messages.exportingAction : messages.exportAction}</span>
+                </button>
 
-                <AlertDialog.Portal>
-                  <AlertDialog.Overlay className={styles.dialogOverlay} />
-                  <div className={styles.dialogViewport}>
-                    <AlertDialog.Content className={styles.confirmDialogContent}>
-                      <AlertDialog.Title className={styles.confirmTitle}>
-                        {messages.resetConfirmTitle}
-                      </AlertDialog.Title>
-                      <AlertDialog.Description className={styles.confirmDescription}>
-                        {messages.resetConfirmDescription}
-                      </AlertDialog.Description>
-                      <div className={styles.confirmActions}>
-                        <AlertDialog.Action asChild>
-                          <button
-                            className={styles.button({ variant: "danger" })}
-                            type="button"
-                            disabled={isResetting}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              void resetLocalData();
-                            }}
-                          >
-                            <Trash2 className={styles.icon} aria-hidden="true" />
-                            <span>
-                              {isResetting ? messages.resettingAction : messages.resetConfirmAction}
-                            </span>
-                          </button>
-                        </AlertDialog.Action>
-                        <AlertDialog.Cancel asChild>
-                          <button
-                            className={styles.button({ variant: "secondary" })}
-                            type="button"
-                            disabled={isResetting}
-                          >
-                            {messages.cancelAction}
-                          </button>
-                        </AlertDialog.Cancel>
-                      </div>
-                    </AlertDialog.Content>
-                  </div>
-                </AlertDialog.Portal>
-              </AlertDialog.Root>
+                <AlertDialog.Root open={isResetOpen} onOpenChange={updateResetDialog}>
+                  <AlertDialog.Trigger asChild>
+                    <button
+                      className={styles.button({ variant: "danger" })}
+                      type="button"
+                      disabled={isExporting || isResetting}
+                    >
+                      <Trash2 className={styles.icon} aria-hidden="true" />
+                      <span>{messages.resetAction}</span>
+                    </button>
+                  </AlertDialog.Trigger>
+
+                  <AlertDialog.Portal>
+                    <AlertDialog.Overlay className={styles.dialogOverlay} />
+                    <div className={styles.dialogViewport}>
+                      <AlertDialog.Content className={styles.confirmDialogContent}>
+                        <AlertDialog.Title className={styles.confirmTitle}>
+                          {messages.resetConfirmTitle}
+                        </AlertDialog.Title>
+                        <AlertDialog.Description className={styles.confirmDescription}>
+                          {messages.resetConfirmDescription}
+                        </AlertDialog.Description>
+                        <div className={styles.confirmActions}>
+                          <AlertDialog.Action asChild>
+                            <button
+                              className={styles.button({ variant: "danger" })}
+                              type="button"
+                              disabled={isResetting}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                void resetLocalData();
+                              }}
+                            >
+                              <Trash2 className={styles.icon} aria-hidden="true" />
+                              <span>
+                                {isResetting
+                                  ? messages.resettingAction
+                                  : messages.resetConfirmAction}
+                              </span>
+                            </button>
+                          </AlertDialog.Action>
+                          <AlertDialog.Cancel asChild>
+                            <button
+                              className={styles.button({ variant: "secondary" })}
+                              type="button"
+                              disabled={isResetting}
+                            >
+                              {messages.cancelAction}
+                            </button>
+                          </AlertDialog.Cancel>
+                        </div>
+                      </AlertDialog.Content>
+                    </div>
+                  </AlertDialog.Portal>
+                </AlertDialog.Root>
+              </div>
             </section>
           </Dialog.Content>
         </div>

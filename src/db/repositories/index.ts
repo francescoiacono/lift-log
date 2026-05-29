@@ -1,5 +1,9 @@
 export { createExerciseRepository, exerciseRepository } from "./exercises-repository";
-export { createLocalDataRepository, localDataRepository } from "./local-data-repository";
+export {
+  createLocalDataRepository,
+  localDataExportFormat,
+  localDataRepository,
+} from "./local-data-repository";
 export {
   createWorkoutTemplateRepository,
   workoutTemplateRepository,
@@ -14,7 +18,11 @@ export type {
   ExerciseRepositoryOptions,
   UpdateExerciseInput,
 } from "./exercises-repository";
-export type { LocalDataRepository, LocalDataRepositoryOptions } from "./local-data-repository";
+export type {
+  LocalDataExport,
+  LocalDataRepository,
+  LocalDataRepositoryOptions,
+} from "./local-data-repository";
 export type {
   CreateWorkoutTemplateInput,
   UpdateWorkoutTemplateInput,
@@ -23,6 +31,9 @@ export type {
 } from "./workout-templates-repository";
 export type {
   ActiveWorkoutSnapshot,
+  CreateActiveWorkoutTemplateInput,
+  CreateActiveWorkoutTemplateResult,
+  CreateWorkoutTemplateFromSessionInput,
   LogWorkoutSetInput,
   StartEmptyWorkoutInput,
   UpdateWorkoutSetInput,

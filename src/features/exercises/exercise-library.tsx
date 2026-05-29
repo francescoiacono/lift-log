@@ -16,6 +16,9 @@ export type ExerciseLibraryProps = {
   /** Localized copy used by the exercise library UI. */
   messages: ExerciseLibraryMessages;
 
+  /** Whether the exercise library is the currently visible app view. */
+  isActive?: boolean;
+
   /** Repository used to persist exercise records. */
   repository?: ExerciseRepository;
 };
@@ -89,6 +92,7 @@ const formatExerciseActionLabel = (template: string, exerciseName: string): stri
 /** Root exercise library feature with create, edit, list, and delete flows. */
 export const ExerciseLibrary = ({
   messages,
+  isActive = true,
   repository = exerciseRepository,
 }: ExerciseLibraryProps) => {
   const [exercises, setExercises] = useState<Exercise[]>([]);
@@ -120,8 +124,22 @@ export const ExerciseLibrary = ({
   }, [messages.loadError, repository]);
 
   useEffect(() => {
-    void refreshExercises();
-  }, [refreshExercises]);
+    if (isActive) {
+      void refreshExercises();
+    }
+  }, [isActive, refreshExercises]);
+
+  useEffect(() => {
+    if (isActive) {
+      return;
+    }
+
+    setFormState(createEmptyFormState());
+    setEditingExerciseId(null);
+    setPendingDeleteId(null);
+    setFeedbackMessage(null);
+    setIsFormOpen(false);
+  }, [isActive]);
 
   /** Opens the form in create mode. */
   const openCreateForm = () => {

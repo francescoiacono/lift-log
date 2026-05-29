@@ -1,5 +1,6 @@
-import { ChevronDown, History } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { Check, ChevronDown, ClipboardList, History, RotateCcw, X } from "lucide-react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { styles } from "./workout-history.styles";
 import type {
@@ -22,11 +23,17 @@ export type WorkoutHistoryProps = {
   /** Localized copy used by the workout history UI. */
   messages: WorkoutHistoryMessages;
 
+  /** Whether the workout history screen is the currently visible app view. */
+  isActive?: boolean;
+
   /** Repository used to read finished workout sessions. */
   repository?: WorkoutSessionRepository;
 
   /** Repository used to read exercise names for saved sessions. */
   exerciseStore?: ExerciseRepository;
+
+  /** Called after a workout session has been started from history. */
+  onSessionStarted?: () => void;
 };
 
 /** Async loading states used by the workout history screen. */
@@ -135,6 +142,23 @@ const formatWorkoutToggleLabel = (template: string, sessionName: string): string
   return template.replace("{name}", sessionName);
 };
 
+/** Formats a workout action label with the target session name. */
+const formatWorkoutActionLabel = (template: string, sessionName: string): string => {
+  return template.replace("{name}", sessionName);
+};
+
+/** Creates a default plan name from a finished workout session. */
+const createDefaultPlanName = (
+  session: WorkoutSession,
+  messages: WorkoutHistoryMessages,
+): string => {
+  const sessionName = session.name?.trim();
+
+  return sessionName && sessionName !== messages.emptyWorkoutName
+    ? sessionName
+    : messages.saveAsPlanNameFallback;
+};
+
 /** Sorts persisted session exercises by their display order. */
 const sortSessionExercises = (exercises: WorkoutSessionExercise[]): WorkoutSessionExercise[] => {
   return [...exercises].sort(
@@ -150,18 +174,32 @@ const sortWorkoutSets = (sets: WorkoutSet[]): WorkoutSet[] => {
 /** Mobile-first screen for reviewing finished workout sessions. */
 export const WorkoutHistory = ({
   messages,
+  isActive = true,
   repository = workoutSessionRepository,
   exerciseStore = exerciseRepository,
+  onSessionStarted,
 }: WorkoutHistoryProps) => {
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [openSessionId, setOpenSessionId] = useState<EntityId | null>(null);
+  const hasInitializedOpenSessionRef = useRef(false);
+  const previousSessionCountRef = useRef(0);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [repeatingSessionId, setRepeatingSessionId] = useState<EntityId | null>(null);
+  const [planSourceSessionId, setPlanSourceSessionId] = useState<EntityId | null>(null);
+  const [planName, setPlanName] = useState("");
+  const [isSavingPlan, setIsSavingPlan] = useState(false);
 
   const exerciseById = useMemo(() => {
     return new Map(exercises.map((exercise) => [exercise.id, exercise]));
   }, [exercises]);
+  const planSourceSession = useMemo(() => {
+    return sessions.find((session) => session.id === planSourceSessionId);
+  }, [planSourceSessionId, sessions]);
+  const isPlanDialogOpen = planSourceSessionId !== null;
+  const pageFeedbackMessage = isPlanDialogOpen ? null : feedbackMessage;
+  const planFeedbackMessage = isPlanDialogOpen ? feedbackMessage : null;
 
   /** Refreshes saved workout sessions and exercise names from IndexedDB. */
   const refreshData = useCallback(async () => {
@@ -171,17 +209,22 @@ export const WorkoutHistory = ({
         exerciseStore.list(),
       ]);
 
+      const shouldOpenFirstSession =
+        !hasInitializedOpenSessionRef.current || previousSessionCountRef.current === 0;
+
       setSessions(nextSessions);
       setExercises(nextExercises);
       setOpenSessionId((currentOpenSessionId) => {
         if (currentOpenSessionId === null) {
-          return nextSessions[0]?.id ?? null;
+          return shouldOpenFirstSession ? (nextSessions[0]?.id ?? null) : null;
         }
 
         return nextSessions.some((session) => session.id === currentOpenSessionId)
           ? currentOpenSessionId
           : (nextSessions[0]?.id ?? null);
       });
+      hasInitializedOpenSessionRef.current = true;
+      previousSessionCountRef.current = nextSessions.length;
       setLoadState("ready");
     } catch {
       setLoadState("error");
@@ -190,14 +233,128 @@ export const WorkoutHistory = ({
   }, [exerciseStore, messages.loadError, repository]);
 
   useEffect(() => {
-    void refreshData();
-  }, [refreshData]);
+    if (isActive) {
+      void refreshData();
+    }
+  }, [isActive, refreshData]);
+
+  useEffect(() => {
+    if (isActive) {
+      return;
+    }
+
+    setFeedbackMessage(null);
+    setIsSavingPlan(false);
+    setPlanName("");
+    setPlanSourceSessionId(null);
+    setRepeatingSessionId(null);
+  }, [isActive]);
 
   /** Toggles a saved workout card between summary and detail states. */
   const toggleSession = (sessionId: EntityId) => {
     setOpenSessionId((currentOpenSessionId) =>
       currentOpenSessionId === sessionId ? null : sessionId,
     );
+  };
+
+  /** Starts a fresh active workout from a finished workout in history. */
+  const repeatWorkout = async (session: WorkoutSession) => {
+    if (session.exercises.length === 0) {
+      setFeedbackMessage(messages.repeatError);
+      return;
+    }
+
+    setRepeatingSessionId(session.id);
+    setFeedbackMessage(null);
+
+    try {
+      const existingWorkout = await repository.getActive();
+
+      if (existingWorkout) {
+        setFeedbackMessage(messages.activeWorkoutExists);
+        return;
+      }
+
+      const nextSnapshot = await repository.repeatFinished(session.id);
+
+      if (!nextSnapshot) {
+        setFeedbackMessage(messages.repeatError);
+        return;
+      }
+
+      onSessionStarted?.();
+    } catch {
+      setFeedbackMessage(messages.repeatError);
+    } finally {
+      setRepeatingSessionId(null);
+    }
+  };
+
+  /** Opens the save-as-plan dialog with a useful default name. */
+  const openSavePlanDialog = (session: WorkoutSession) => {
+    if (session.exercises.length === 0) {
+      setFeedbackMessage(messages.savePlanError);
+      return;
+    }
+
+    setFeedbackMessage(null);
+    setPlanName(createDefaultPlanName(session, messages));
+    setPlanSourceSessionId(session.id);
+  };
+
+  /** Closes the save-as-plan dialog and clears transient form state. */
+  const closeSavePlanDialog = () => {
+    setFeedbackMessage(null);
+    setPlanName("");
+    setPlanSourceSessionId(null);
+  };
+
+  /** Updates the controlled save-as-plan dialog state. */
+  const updateSavePlanDialog = (isOpen: boolean) => {
+    if (isOpen) {
+      return;
+    }
+
+    closeSavePlanDialog();
+  };
+
+  /** Saves the selected finished workout as a reusable workout plan. */
+  const saveWorkoutAsPlan = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!planSourceSession || planSourceSession.exercises.length === 0) {
+      setFeedbackMessage(messages.savePlanError);
+      return;
+    }
+
+    const name = planName.trim();
+
+    if (name.length === 0) {
+      setFeedbackMessage(messages.validationPlanNameRequired);
+      return;
+    }
+
+    setIsSavingPlan(true);
+    setFeedbackMessage(null);
+
+    try {
+      const workoutTemplate = await repository.createTemplateFromFinished(planSourceSession.id, {
+        name,
+      });
+
+      if (!workoutTemplate) {
+        setFeedbackMessage(messages.savePlanError);
+        return;
+      }
+
+      setPlanName("");
+      setPlanSourceSessionId(null);
+      setFeedbackMessage(messages.planSavedSuccess);
+    } catch {
+      setFeedbackMessage(messages.savePlanError);
+    } finally {
+      setIsSavingPlan(false);
+    }
   };
 
   return (
@@ -218,7 +375,7 @@ export const WorkoutHistory = ({
         </div>
       </header>
 
-      {feedbackMessage ? <p className={styles.feedback}>{feedbackMessage}</p> : null}
+      {pageFeedbackMessage ? <p className={styles.feedback}>{pageFeedbackMessage}</p> : null}
 
       {loadState === "loading" ? (
         <div className={styles.emptyState}>
@@ -266,6 +423,41 @@ export const WorkoutHistory = ({
 
                 {isOpen ? (
                   <div className={styles.sessionDetails}>
+                    <div className={styles.sessionActions}>
+                      <button
+                        aria-label={formatWorkoutActionLabel(
+                          messages.repeatWorkoutAriaLabel,
+                          sessionName,
+                        )}
+                        className={styles.button({ variant: "primary" })}
+                        type="button"
+                        disabled={
+                          session.exercises.length === 0 || repeatingSessionId === session.id
+                        }
+                        onClick={() => void repeatWorkout(session)}
+                      >
+                        <RotateCcw className={styles.icon} aria-hidden="true" />
+                        <span>
+                          {repeatingSessionId === session.id
+                            ? messages.repeatingAction
+                            : messages.repeatAction}
+                        </span>
+                      </button>
+                      <button
+                        aria-label={formatWorkoutActionLabel(
+                          messages.saveWorkoutAsPlanAriaLabel,
+                          sessionName,
+                        )}
+                        className={styles.button({ variant: "secondary" })}
+                        type="button"
+                        disabled={session.exercises.length === 0 || isSavingPlan}
+                        onClick={() => openSavePlanDialog(session)}
+                      >
+                        <ClipboardList className={styles.icon} aria-hidden="true" />
+                        <span>{messages.saveAsPlanAction}</span>
+                      </button>
+                    </div>
+
                     {sessionExercises.length === 0 ? (
                       <p className={styles.emptyDetail}>{messages.noExercises}</p>
                     ) : (
@@ -308,6 +500,73 @@ export const WorkoutHistory = ({
           })}
         </ul>
       ) : null}
+
+      <Dialog.Root open={isPlanDialogOpen} onOpenChange={updateSavePlanDialog}>
+        <Dialog.Portal>
+          <Dialog.Overlay className={styles.dialogOverlay} />
+          <div className={styles.dialogViewport}>
+            <Dialog.Content className={styles.dialogContent}>
+              <form
+                className={styles.formPanel}
+                onSubmit={(event) => void saveWorkoutAsPlan(event)}
+              >
+                <div className={styles.formHeader}>
+                  <div className={styles.formHeading}>
+                    <Dialog.Title className={styles.formTitle}>
+                      {messages.saveAsPlanTitle}
+                    </Dialog.Title>
+                    <Dialog.Description className={styles.formDescription}>
+                      {messages.saveAsPlanDescription}
+                    </Dialog.Description>
+                  </div>
+                  <Dialog.Close asChild>
+                    <button className={styles.iconButton({ variant: "ghost" })} type="button">
+                      <X className={styles.icon} aria-hidden="true" />
+                      <span className={styles.visuallyHidden}>{messages.cancelAction}</span>
+                    </button>
+                  </Dialog.Close>
+                </div>
+
+                {planFeedbackMessage ? (
+                  <p className={styles.feedback}>{planFeedbackMessage}</p>
+                ) : null}
+
+                <label className={styles.field}>
+                  <span className={styles.label}>{messages.planNameLabel}</span>
+                  <input
+                    className={styles.input}
+                    value={planName}
+                    placeholder={messages.planNamePlaceholder}
+                    onChange={(event) => setPlanName(event.currentTarget.value)}
+                  />
+                </label>
+
+                <div className={styles.formActions}>
+                  <button
+                    className={styles.button({ variant: "primary" })}
+                    type="submit"
+                    disabled={isSavingPlan}
+                  >
+                    <Check className={styles.icon} aria-hidden="true" />
+                    <span>
+                      {isSavingPlan ? messages.savingPlanAction : messages.saveAsPlanAction}
+                    </span>
+                  </button>
+                  <Dialog.Close asChild>
+                    <button
+                      className={styles.button({ variant: "secondary" })}
+                      type="button"
+                      disabled={isSavingPlan}
+                    >
+                      {messages.cancelAction}
+                    </button>
+                  </Dialog.Close>
+                </div>
+              </form>
+            </Dialog.Content>
+          </div>
+        </Dialog.Portal>
+      </Dialog.Root>
     </section>
   );
 };

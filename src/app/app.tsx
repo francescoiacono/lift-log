@@ -36,10 +36,21 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
     setActiveView("sessions");
   };
 
+  /** Reloads all screens from the newly imported local data. */
+  const handleLocalDataImported = () => {
+    setInitialWorkoutFeedback(messages.settings.importSuccess);
+    setDataResetVersion((currentVersion) => currentVersion + 1);
+    setActiveView("sessions");
+  };
+
   return (
     <main className={styles.shell}>
       <div className={styles.globalActions}>
-        <LocalDataSettings messages={messages.settings} onDataReset={handleLocalDataReset} />
+        <LocalDataSettings
+          messages={messages.settings}
+          onDataReset={handleLocalDataReset}
+          onDataImported={handleLocalDataImported}
+        />
       </div>
 
       <nav className={styles.navigation} aria-label={messages.app.navigationLabel}>

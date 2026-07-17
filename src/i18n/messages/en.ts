@@ -180,6 +180,14 @@ export const enMessages = {
     exportAction: "Export data",
     exportingAction: "Exporting",
     exportError: "Local data could not be exported.",
+    importAction: "Import data",
+    importingAction: "Importing",
+    importConfirmTitle: "Replace all local data?",
+    importConfirmDescription:
+      "Importing replaces every exercise, workout plan, saved workout, active workout, rest timer, and app setting on this device with the contents of the selected file. This cannot be undone.",
+    importConfirmAction: "Import data",
+    importSuccess: "Local data was imported.",
+    importError: "The selected file could not be imported.",
     resetAction: "Reset local data",
     resetConfirmTitle: "Reset all local data?",
     resetConfirmDescription:

@@ -105,6 +105,9 @@ export type WorkoutSessionRepository = {
   /** Lists finished workout sessions, optionally capped to a recent count. */
   listFinished: (limit?: number) => Promise<WorkoutSession[]>;
 
+  /** Counts all finished workout sessions on this device. */
+  countFinished: () => Promise<number>;
+
   /** Deletes a finished workout session by id. */
   deleteFinished: (sessionId: EntityId) => Promise<boolean>;
 
@@ -334,6 +337,11 @@ export const createWorkoutSessionRepository = ({
       });
 
       return limit === undefined ? sortedWorkoutSessions : sortedWorkoutSessions.slice(0, limit);
+    },
+
+    /** Counts all finished workout sessions on this device. */
+    countFinished: async () => {
+      return database.workoutSessions.where("status").equals("finished").count();
     },
 
     /** Deletes a finished workout session by id. */

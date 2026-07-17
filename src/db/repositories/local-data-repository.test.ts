@@ -10,7 +10,11 @@ import {
   type LiftLogDatabase,
 } from "../database";
 import type { Exercise, WorkoutSession, WorkoutTemplate } from "../entities";
-import { createLocalDataRepository, localDataExportFormat } from "./local-data-repository";
+import {
+  createLocalDataRepository,
+  InvalidLocalDataImportError,
+  localDataExportFormat,
+} from "./local-data-repository";
 
 let database: LiftLogDatabase | undefined;
 let databaseIndex = 0;
@@ -99,6 +103,55 @@ describe("createLocalDataRepository", () => {
       settings: [settings],
       activeWorkout: [activeWorkout],
     });
+  });
+
+  it("replaces all local app data with an imported snapshot", async () => {
+    const testDatabase = createTestDatabase();
+    const repository = createLocalDataRepository({
+      database: testDatabase,
+      now: () => "2026-05-07T12:00:00.000Z",
+    });
+
+    await testDatabase.exercises.add(exercise);
+    await testDatabase.workoutTemplates.add(workoutTemplate);
+    await testDatabase.workoutSessions.add(workoutSession);
+    const snapshot = await repository.exportData();
+
+    // Add data that is absent from the snapshot; import must remove it.
+    await testDatabase.exercises.add({ ...exercise, id: "stale-exercise", name: "Old lift" });
+
+    await repository.importData(snapshot);
+
+    await expect(repository.exportData()).resolves.toEqual(snapshot);
+    await expect(testDatabase.exercises.get("stale-exercise")).resolves.toBeUndefined();
+  });
+
+  it("rejects an incompatible import file without touching stored data", async () => {
+    const testDatabase = createTestDatabase();
+    const repository = createLocalDataRepository({ database: testDatabase });
+
+    await testDatabase.exercises.add(exercise);
+
+    await expect(repository.importData({ format: "something-else" })).rejects.toBeInstanceOf(
+      InvalidLocalDataImportError,
+    );
+    await expect(testDatabase.exercises.count()).resolves.toBe(1);
+  });
+
+  it("rejects a file with malformed records before clearing stored data", async () => {
+    const testDatabase = createTestDatabase();
+    const repository = createLocalDataRepository({ database: testDatabase });
+
+    await testDatabase.exercises.add(exercise);
+    const snapshot = await repository.exportData();
+
+    // Valid envelope, but a record is missing its string id: must fail before clearing.
+    const corrupted = { ...snapshot, exercises: [{ name: "No id" }] };
+
+    await expect(repository.importData(corrupted)).rejects.toBeInstanceOf(
+      InvalidLocalDataImportError,
+    );
+    await expect(testDatabase.exercises.get(exercise.id)).resolves.toEqual(exercise);
   });
 
   it("clears all local app data stores", async () => {

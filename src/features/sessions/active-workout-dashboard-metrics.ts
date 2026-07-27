@@ -1,6 +1,44 @@
-import type { WorkoutSession } from "@/db";
+import type { EntityId, IsoDateTime, WorkoutSession, WorkoutSet } from "@/db";
 
 const millisecondsPerDay = 86_400_000;
+
+/** Sets logged for an exercise in its most recent finished session. */
+export type LastSessionSets = {
+  /** Start timestamp of the session the sets came from. */
+  startedAt: IsoDateTime;
+
+  /** Sets logged for the exercise, in display order. */
+  sets: WorkoutSet[];
+};
+
+/** Finds the sets logged for an exercise in the most recent finished session. */
+export const findLastSessionSets = (
+  exerciseId: EntityId,
+  finishedSessions: WorkoutSession[],
+): LastSessionSets | undefined => {
+  let latest: LastSessionSets | undefined;
+
+  for (const session of finishedSessions) {
+    const sessionExercise = session.exercises.find(
+      (exercise) => exercise.exerciseId === exerciseId && exercise.sets.length > 0,
+    );
+
+    if (!sessionExercise) {
+      continue;
+    }
+
+    if (latest && new Date(session.startedAt).getTime() <= new Date(latest.startedAt).getTime()) {
+      continue;
+    }
+
+    latest = {
+      startedAt: session.startedAt,
+      sets: [...sessionExercise.sets].sort((first, second) => first.order - second.order),
+    };
+  }
+
+  return latest;
+};
 
 /** Returns the local calendar-day start time for a date. */
 const getLocalDateStartMs = (date: Date): number => {

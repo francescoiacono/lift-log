@@ -120,9 +120,7 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           isActive={isSessionsActive}
           messages={messages.sessions}
           onInitialFeedbackShown={() => setInitialWorkoutFeedback(null)}
-          onOpenExercises={() => setActiveView("exercises")}
           onOpenHistory={() => setActiveView("history")}
-          onOpenPlans={() => setActiveView("workouts")}
         />
       </div>
     </main>

@@ -18,7 +18,11 @@ import {
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-import { calculateTrainingDayStreak } from "./active-workout-dashboard-metrics";
+import {
+  calculateTrainingDayStreak,
+  findLastSessionSets,
+  type LastSessionSets,
+} from "./active-workout-dashboard-metrics";
 import { styles } from "./active-workout-screen.styles";
 import type {
   ActiveRestTimer,
@@ -58,12 +62,6 @@ export type ActiveWorkoutScreenProps = {
 
   /** Repository used to read exercise names for session entries. */
   exerciseStore?: ExerciseRepository;
-
-  /** Called when the user wants to manage reusable workout plans. */
-  onOpenPlans?: () => void;
-
-  /** Called when the user needs to create exercises before training. */
-  onOpenExercises?: () => void;
 
   /** Called when the user wants to inspect saved workout history. */
   onOpenHistory?: () => void;
@@ -298,6 +296,17 @@ const formatLoggedSet = (set: WorkoutSet, messages: ActiveWorkoutMessages): stri
   return `${setLabel} · ${repsLabel} · ${weightLabel} · ${restLabel}`;
 };
 
+/** Formats one previous set as a compact weight × reps summary. */
+const formatLastSessionSet = (set: WorkoutSet, messages: ActiveWorkoutMessages): string => {
+  const repsText = set.reps === null ? messages.noReps : String(set.reps);
+
+  if (set.weight === null) {
+    return repsText;
+  }
+
+  return `${formatWeightMessage(messages.weightValue, set.weight, set.weightUnit)} × ${repsText}`;
+};
+
 /** Formats an exercise toggle label with the target exercise name. */
 const formatExerciseToggleLabel = (template: string, exerciseName: string): string => {
   return template.replace("{name}", exerciseName);
@@ -401,8 +410,6 @@ export const ActiveWorkoutScreen = ({
   repository = workoutSessionRepository,
   templateRepository = workoutTemplateRepository,
   exerciseStore = exerciseRepository,
-  onOpenPlans,
-  onOpenExercises,
   onOpenHistory,
   onInitialFeedbackShown,
 }: ActiveWorkoutScreenProps) => {
@@ -430,6 +437,7 @@ export const ActiveWorkoutScreen = ({
   const [isSavingSetEdit, setIsSavingSetEdit] = useState(false);
   const [isDeletingSet, setIsDeletingSet] = useState(false);
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
+  const [isRestTimerMinimized, setIsRestTimerMinimized] = useState(false);
 
   const exerciseById = useMemo(() => {
     return new Map(exercises.map((exercise) => [exercise.id, exercise]));
@@ -443,6 +451,19 @@ export const ActiveWorkoutScreen = ({
   const activeExerciseIds = useMemo(() => {
     return new Set(sessionExercises.map((sessionExercise) => sessionExercise.exerciseId));
   }, [sessionExercises]);
+  const lastSessionByExerciseId = useMemo(() => {
+    const entries = new Map<EntityId, LastSessionSets>();
+
+    for (const sessionExercise of sessionExercises) {
+      const lastSession = findLastSessionSets(sessionExercise.exerciseId, finishedSessions);
+
+      if (lastSession) {
+        entries.set(sessionExercise.exerciseId, lastSession);
+      }
+    }
+
+    return entries;
+  }, [finishedSessions, sessionExercises]);
   const availableExercises = useMemo(() => {
     return exercises.filter((exercise) => !activeExerciseIds.has(exercise.id));
   }, [activeExerciseIds, exercises]);
@@ -558,6 +579,12 @@ export const ActiveWorkoutScreen = ({
     setInitializedSessionId(activeSession.id);
   }, [activeSession, initializedSessionId, sessionExercises]);
 
+  // Re-expand the timer whenever a new rest period begins (endsAt is stable across
+  // snapshot refreshes, so a plain refresh keeps the timer minimized).
+  useEffect(() => {
+    setIsRestTimerMinimized(false);
+  }, [activeRestTimer?.endsAt]);
+
   useEffect(() => {
     if (!activeRestTimer) {
       return undefined;
@@ -656,16 +683,6 @@ export const ActiveWorkoutScreen = ({
     }
 
     await startEmptyWorkout();
-  };
-
-  /** Shows lightweight feedback when no rest timer is currently running. */
-  const openRestTimerShortcut = () => {
-    if (activeRestTimer) {
-      setTimerNowMs(Date.now());
-      return;
-    }
-
-    setFeedbackMessage(messages.restTimerUnavailable);
   };
 
   /** Opens the active-workout exercise picker when an exercise can be added. */
@@ -1121,53 +1138,6 @@ export const ActiveWorkoutScreen = ({
             </div>
           </section>
 
-          <section className={styles.dashboardSection} aria-labelledby="quick-access-title">
-            <h2 className={styles.sectionTitle} id="quick-access-title">
-              {messages.quickAccessTitle}
-            </h2>
-            <div className={styles.quickAccessGrid}>
-              {onOpenExercises ? (
-                <button
-                  className={styles.quickAccessButton}
-                  type="button"
-                  onClick={onOpenExercises}
-                >
-                  <Dumbbell
-                    className={styles.quickAccessIcon({ tone: "accent" })}
-                    aria-hidden="true"
-                  />
-                  <span>{messages.exercisesShortcut}</span>
-                </button>
-              ) : null}
-              {onOpenPlans ? (
-                <button className={styles.quickAccessButton} type="button" onClick={onOpenPlans}>
-                  <ClipboardList
-                    className={styles.quickAccessIcon({ tone: "blue" })}
-                    aria-hidden="true"
-                  />
-                  <span>{messages.templatesShortcut}</span>
-                </button>
-              ) : null}
-              {onOpenHistory ? (
-                <button className={styles.quickAccessButton} type="button" onClick={onOpenHistory}>
-                  <History
-                    className={styles.quickAccessIcon({ tone: "muted" })}
-                    aria-hidden="true"
-                  />
-                  <span>{messages.historyShortcut}</span>
-                </button>
-              ) : null}
-              <button
-                className={styles.quickAccessButton}
-                type="button"
-                onClick={openRestTimerShortcut}
-              >
-                <Timer className={styles.quickAccessIcon({ tone: "muted" })} aria-hidden="true" />
-                <span>{messages.restTimerShortcut}</span>
-              </button>
-            </div>
-          </section>
-
           <button
             className={styles.streakCard}
             type="button"
@@ -1273,6 +1243,7 @@ export const ActiveWorkoutScreen = ({
                 const sets = sortWorkoutSets(sessionExercise.sets);
                 const isSavingSet = savingSetExerciseId === sessionExercise.exerciseId;
                 const isExerciseOpen = openExerciseIds.includes(sessionExercise.exerciseId);
+                const lastSession = lastSessionByExerciseId.get(sessionExercise.exerciseId);
 
                 return (
                   <li className={styles.exerciseCard} key={sessionExercise.exerciseId}>
@@ -1302,6 +1273,17 @@ export const ActiveWorkoutScreen = ({
 
                     {isExerciseOpen ? (
                       <div className={styles.exerciseDetails}>
+                        {lastSession ? (
+                          <p className={styles.lastSession}>
+                            <History className={styles.lastSessionIcon} aria-hidden="true" />
+                            <span className={styles.lastSessionText}>
+                              {messages.lastSessionLabel}:{" "}
+                              {lastSession.sets
+                                .map((set) => formatLastSessionSet(set, messages))
+                                .join(" · ")}
+                            </span>
+                          </p>
+                        ) : null}
                         {sets.length > 0 ? (
                           <ol className={styles.setList}>
                             {sets.map((set) => (
@@ -1411,14 +1393,27 @@ export const ActiveWorkoutScreen = ({
         </article>
       ) : null}
 
-      <Dialog.Root open={isActive && activeRestTimer !== undefined && activeRestTimer !== null}>
+      <Dialog.Root
+        open={
+          isActive &&
+          activeRestTimer !== undefined &&
+          activeRestTimer !== null &&
+          !isRestTimerMinimized
+        }
+      >
         <Dialog.Portal>
           <Dialog.Overlay className={styles.dialogOverlay} />
           <div className={styles.dialogViewport}>
             <Dialog.Content
               className={styles.restTimerDialogContent}
-              onEscapeKeyDown={(event) => event.preventDefault()}
-              onPointerDownOutside={(event) => event.preventDefault()}
+              onEscapeKeyDown={(event) => {
+                event.preventDefault();
+                setIsRestTimerMinimized(true);
+              }}
+              onPointerDownOutside={(event) => {
+                event.preventDefault();
+                setIsRestTimerMinimized(true);
+              }}
             >
               {activeRestTimer ? (
                 <>
@@ -1438,21 +1433,59 @@ export const ActiveWorkoutScreen = ({
                       )}
                     </Dialog.Description>
                   </div>
-                  <button
-                    className={styles.button({ variant: "primary" })}
-                    type="button"
-                    disabled={isClearingTimer}
-                    onClick={() => void clearRestTimer()}
-                  >
-                    <X className={styles.icon} aria-hidden="true" />
-                    <span>{messages.skipTimerAction}</span>
-                  </button>
+                  <div className={styles.restTimerActions}>
+                    <button
+                      className={styles.button({ variant: "primary" })}
+                      type="button"
+                      onClick={() => setIsRestTimerMinimized(true)}
+                    >
+                      <ChevronDown className={styles.icon} aria-hidden="true" />
+                      <span>{messages.hideTimerAction}</span>
+                    </button>
+                    <button
+                      className={styles.button({ variant: "secondary" })}
+                      type="button"
+                      disabled={isClearingTimer}
+                      onClick={() => void clearRestTimer()}
+                    >
+                      <X className={styles.icon} aria-hidden="true" />
+                      <span>{messages.skipTimerAction}</span>
+                    </button>
+                  </div>
                 </>
               ) : null}
             </Dialog.Content>
           </div>
         </Dialog.Portal>
       </Dialog.Root>
+
+      {isActive && activeRestTimer && isRestTimerMinimized ? (
+        <div className={styles.restTimerPill}>
+          <button
+            className={styles.restTimerPillMain}
+            type="button"
+            aria-label={messages.showTimerAriaLabel}
+            onClick={() => setIsRestTimerMinimized(false)}
+          >
+            <Timer className={styles.restTimerPillIcon} aria-hidden="true" />
+            <span className={styles.restTimerPillLabel}>
+              {remainingRestSeconds > 0 ? messages.restTimerLabel : messages.restTimerCompleteLabel}
+            </span>
+            <span className={styles.restTimerPillTime}>
+              {formatTimerDuration(remainingRestSeconds)}
+            </span>
+          </button>
+          <button
+            className={styles.restTimerPillSkip}
+            type="button"
+            disabled={isClearingTimer}
+            aria-label={messages.skipTimerAction}
+            onClick={() => void clearRestTimer()}
+          >
+            <X className={styles.setActionIcon} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
 
       <Dialog.Root open={isSavePlanDialogOpen} onOpenChange={updateSavePlanDialog}>
         <Dialog.Portal>

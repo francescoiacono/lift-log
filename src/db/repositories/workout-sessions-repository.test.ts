@@ -213,6 +213,7 @@ describe("createWorkoutSessionRepository", () => {
         id: "set-1",
         order: 0,
         reps: 8,
+        durationSeconds: null,
         weight: 80,
         weightUnit: "kg",
         isCompleted: true,
@@ -231,6 +232,37 @@ describe("createWorkoutSessionRepository", () => {
       },
       updatedAt: "2026-05-07T11:08:00.000Z",
     });
+  });
+
+  it("logs a timed hold set with a duration and no reps", async () => {
+    const repository = createWorkoutSessionRepository({
+      database: createTestDatabase(),
+      createId: createIdFactory(["session-1", "set-1"]),
+      now: createTimestampFactory(["2026-05-07T11:00:00.000Z", "2026-05-07T11:08:00.000Z"]),
+    });
+
+    await database?.workoutTemplates.add(createWorkoutTemplate());
+    await repository.startFromTemplate("template-1");
+    const workoutSession = await repository.logSet("session-1", "exercise-a", {
+      reps: null,
+      durationSeconds: 45,
+      restSeconds: 60,
+    });
+
+    expect(workoutSession?.exercises[0]?.sets).toEqual([
+      {
+        id: "set-1",
+        order: 0,
+        reps: null,
+        durationSeconds: 45,
+        weight: null,
+        weightUnit: "kg",
+        isCompleted: true,
+        completedAt: "2026-05-07T11:08:00.000Z",
+        restSeconds: 60,
+        notes: null,
+      },
+    ]);
   });
 
   it("starts an active workout by repeating a finished workout without copied sets", async () => {
@@ -657,6 +689,7 @@ describe("createWorkoutSessionRepository", () => {
         id: "set-1",
         order: 0,
         reps: 8,
+        durationSeconds: null,
         weight: 80,
         weightUnit: "kg",
         isCompleted: true,

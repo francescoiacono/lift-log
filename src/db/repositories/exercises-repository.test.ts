@@ -75,11 +75,31 @@ describe("createExerciseRepository", () => {
       name: "Bench Press",
       muscleGroups: ["chest", "triceps"],
       equipment: "barbell",
+      tracksDuration: false,
       notes: null,
       createdAt: "2026-05-07T10:00:00.000Z",
       updatedAt: "2026-05-07T10:00:00.000Z",
     });
     await expect(repository.getById("exercise-1")).resolves.toEqual(exercise);
+  });
+
+  it("persists the timed-hold tracking flag", async () => {
+    const repository = createExerciseRepository({
+      database: createTestDatabase(),
+      createId: createIdFactory(["exercise-1"]),
+      now: createTimestampFactory(["2026-05-07T10:00:00.000Z"]),
+    });
+
+    const exercise = await repository.create({
+      name: "Plank",
+      muscleGroups: ["core"],
+      tracksDuration: true,
+    });
+
+    expect(exercise.tracksDuration).toBe(true);
+    await expect(repository.getById("exercise-1")).resolves.toMatchObject({
+      tracksDuration: true,
+    });
   });
 
   it("lists exercises ordered by name", async () => {

@@ -13,6 +13,9 @@ export type CreateExerciseInput = {
   /** Equipment required for the exercise, when any. */
   equipment?: string | null;
 
+  /** Whether sets are tracked as a timed hold instead of repetitions. */
+  tracksDuration?: boolean;
+
   /** Optional user notes for setup, cues, or substitutions. */
   notes?: string | null;
 };
@@ -27,6 +30,9 @@ export type UpdateExerciseInput = {
 
   /** Equipment required for the exercise, when any. */
   equipment?: string | null;
+
+  /** Whether sets are tracked as a timed hold instead of repetitions. */
+  tracksDuration?: boolean;
 
   /** Optional user notes for setup, cues, or substitutions. */
   notes?: string | null;
@@ -70,8 +76,10 @@ const toNullableText = (value: string | null | undefined): string | null => {
 /** Builds a partial exercise patch while ignoring omitted update fields. */
 const toExercisePatch = (
   input: UpdateExerciseInput,
-): Partial<Pick<Exercise, "equipment" | "muscleGroups" | "name" | "notes">> => {
-  const patch: Partial<Pick<Exercise, "equipment" | "muscleGroups" | "name" | "notes">> = {};
+): Partial<Pick<Exercise, "equipment" | "muscleGroups" | "name" | "notes" | "tracksDuration">> => {
+  const patch: Partial<
+    Pick<Exercise, "equipment" | "muscleGroups" | "name" | "notes" | "tracksDuration">
+  > = {};
 
   if (input.name !== undefined) {
     patch.name = input.name;
@@ -83,6 +91,10 @@ const toExercisePatch = (
 
   if (input.equipment !== undefined) {
     patch.equipment = input.equipment;
+  }
+
+  if (input.tracksDuration !== undefined) {
+    patch.tracksDuration = input.tracksDuration;
   }
 
   if (input.notes !== undefined) {
@@ -117,6 +129,7 @@ export const createExerciseRepository = ({
         name: input.name,
         muscleGroups: input.muscleGroups,
         equipment: toNullableText(input.equipment),
+        tracksDuration: input.tracksDuration ?? false,
         notes: toNullableText(input.notes),
         createdAt: timestamp,
         updatedAt: timestamp,

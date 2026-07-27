@@ -78,6 +78,9 @@ type SetDraftState = {
   /** Controlled reps input value. */
   reps: string;
 
+  /** Controlled hold duration input value for timed exercises. */
+  durationSeconds: string;
+
   /** Controlled weight input value. */
   weight: string;
 
@@ -89,7 +92,7 @@ type SetDraftState = {
 type SetDraftsByExerciseId = Partial<Record<EntityId, SetDraftState>>;
 
 /** Numeric set fields editable from an active workout exercise. */
-type SetDraftNumberField = "reps" | "restSeconds" | "weight";
+type SetDraftNumberField = "durationSeconds" | "reps" | "restSeconds" | "weight";
 
 /** Target set currently being edited. */
 type EditingSetTarget = {
@@ -104,6 +107,7 @@ type EditingSetTarget = {
 const createEmptySetDraft = (): SetDraftState => {
   return {
     reps: "",
+    durationSeconds: "",
     weight: "",
     restSeconds: "",
   };
@@ -279,11 +283,19 @@ const calculateWorkoutCompletionPercent = (session: WorkoutSession | undefined):
   return Math.min(100, Math.round((completedSets / targetSets) * 100));
 };
 
+/** Formats a set's primary effort as either a hold duration or a rep count. */
+const formatSetEffort = (set: WorkoutSet, messages: ActiveWorkoutMessages): string => {
+  if (set.durationSeconds != null) {
+    return messages.durationValue.replace("{seconds}", String(set.durationSeconds));
+  }
+
+  return set.reps === null ? messages.noReps : formatCountMessage(messages.repsCount, set.reps);
+};
+
 /** Formats a completed set into a compact workout log summary. */
 const formatLoggedSet = (set: WorkoutSet, messages: ActiveWorkoutMessages): string => {
   const setLabel = messages.setNumberLabel.replace("{number}", String(set.order + 1));
-  const repsLabel =
-    set.reps === null ? messages.noReps : formatCountMessage(messages.repsCount, set.reps);
+  const repsLabel = formatSetEffort(set, messages);
   const weightLabel =
     set.weight === null
       ? messages.noWeight
@@ -296,8 +308,16 @@ const formatLoggedSet = (set: WorkoutSet, messages: ActiveWorkoutMessages): stri
   return `${setLabel} · ${repsLabel} · ${weightLabel} · ${restLabel}`;
 };
 
-/** Formats one previous set as a compact weight × reps summary. */
+/** Formats one previous set as a compact weight × reps (or hold duration) summary. */
 const formatLastSessionSet = (set: WorkoutSet, messages: ActiveWorkoutMessages): string => {
+  if (set.durationSeconds != null) {
+    const durationText = messages.durationValue.replace("{seconds}", String(set.durationSeconds));
+
+    return set.weight === null
+      ? durationText
+      : `${formatWeightMessage(messages.weightValue, set.weight, set.weightUnit)} · ${durationText}`;
+  }
+
   const repsText = set.reps === null ? messages.noReps : String(set.reps);
 
   if (set.weight === null) {
@@ -400,6 +420,30 @@ const toOptionalNonNegativeNumber = (value: string): number | null | undefined =
   }
 
   return numericValue;
+};
+
+/** Validated reps/duration for a set, or a message when the effort field is invalid. */
+type SetEffortResult = { reps: number | null; durationSeconds: number | null } | { error: string };
+
+/** Reads reps or hold duration from a set draft based on the exercise tracking type. */
+const readSetEffort = (
+  tracksDuration: boolean,
+  draft: Pick<SetDraftState, "durationSeconds" | "reps">,
+  messages: ActiveWorkoutMessages,
+): SetEffortResult => {
+  if (tracksDuration) {
+    const durationSeconds = toPositiveInteger(draft.durationSeconds);
+
+    return durationSeconds === undefined
+      ? { error: messages.validationDurationRequired }
+      : { reps: null, durationSeconds };
+  }
+
+  const reps = toPositiveInteger(draft.reps);
+
+  return reps === undefined
+    ? { error: messages.validationRepsRequired }
+    : { reps, durationSeconds: null };
 };
 
 /** Mobile-first screen for the current active workout session. */
@@ -512,6 +556,7 @@ export const ActiveWorkoutScreen = ({
 
     return {
       exerciseName: exercise?.name ?? messages.missingExercise,
+      tracksDuration: exercise?.tracksDuration ?? false,
       sessionExercise,
       set,
     };
@@ -840,6 +885,7 @@ export const ActiveWorkoutScreen = ({
     });
     setSetEditDraft({
       reps: formatOptionalInteger(set.reps),
+      durationSeconds: formatOptionalInteger(set.durationSeconds ?? null),
       weight: formatOptionalNumber(set.weight),
       restSeconds: formatOptionalInteger(set.restSeconds),
     });
@@ -886,12 +932,13 @@ export const ActiveWorkoutScreen = ({
     }
 
     const draft = getSetDraft(setDrafts, sessionExercise.exerciseId);
-    const reps = toPositiveInteger(draft.reps);
+    const tracksDuration = exerciseById.get(sessionExercise.exerciseId)?.tracksDuration ?? false;
+    const effort = readSetEffort(tracksDuration, draft, messages);
     const weight = toOptionalNonNegativeNumber(draft.weight);
     const parsedRestSeconds = toOptionalNonNegativeInteger(draft.restSeconds);
 
-    if (reps === undefined) {
-      setFeedbackMessage(messages.validationRepsRequired);
+    if ("error" in effort) {
+      setFeedbackMessage(effort.error);
       return;
     }
 
@@ -907,7 +954,8 @@ export const ActiveWorkoutScreen = ({
 
     try {
       const workoutSession = await repository.logSet(activeSession.id, sessionExercise.exerciseId, {
-        reps,
+        reps: effort.reps,
+        durationSeconds: effort.durationSeconds,
         restSeconds,
         weight,
         weightUnit: "kg",
@@ -974,12 +1022,12 @@ export const ActiveWorkoutScreen = ({
       return;
     }
 
-    const reps = toPositiveInteger(setEditDraft.reps);
+    const effort = readSetEffort(editingSetContext.tracksDuration, setEditDraft, messages);
     const weight = toOptionalNonNegativeNumber(setEditDraft.weight);
     const restSeconds = toOptionalNonNegativeInteger(setEditDraft.restSeconds);
 
-    if (reps === undefined) {
-      setFeedbackMessage(messages.validationRepsRequired);
+    if ("error" in effort) {
+      setFeedbackMessage(effort.error);
       return;
     }
 
@@ -997,7 +1045,8 @@ export const ActiveWorkoutScreen = ({
         editingSetTarget.exerciseId,
         editingSetTarget.setId,
         {
-          reps,
+          reps: effort.reps,
+          durationSeconds: effort.durationSeconds,
           restSeconds,
           weight,
           weightUnit: editingSetContext.set.weightUnit,
@@ -1239,6 +1288,7 @@ export const ActiveWorkoutScreen = ({
               {sessionExercises.map((sessionExercise) => {
                 const exercise = exerciseById.get(sessionExercise.exerciseId);
                 const exerciseName = exercise?.name ?? messages.missingExercise;
+                const tracksDuration = exercise?.tracksDuration ?? false;
                 const setDraft = getSetDraft(setDrafts, sessionExercise.exerciseId);
                 const sets = sortWorkoutSets(sessionExercise.sets);
                 const isSavingSet = savingSetExerciseId === sessionExercise.exerciseId;
@@ -1317,18 +1367,24 @@ export const ActiveWorkoutScreen = ({
                         >
                           <div className={styles.setFields}>
                             <label className={styles.setField}>
-                              <span className={styles.setLabel}>{messages.repsLabel}</span>
+                              <span className={styles.setLabel}>
+                                {tracksDuration ? messages.durationLabel : messages.repsLabel}
+                              </span>
                               <input
                                 className={styles.setInput}
                                 type="text"
                                 inputMode="numeric"
                                 pattern="[0-9]*"
-                                value={setDraft.reps}
-                                placeholder={messages.repsPlaceholder}
+                                value={tracksDuration ? setDraft.durationSeconds : setDraft.reps}
+                                placeholder={
+                                  tracksDuration
+                                    ? messages.durationPlaceholder
+                                    : messages.repsPlaceholder
+                                }
                                 onChange={(event) =>
                                   updateSetDraft(
                                     sessionExercise.exerciseId,
-                                    "reps",
+                                    tracksDuration ? "durationSeconds" : "reps",
                                     event.currentTarget.value,
                                   )
                                 }
@@ -1640,15 +1696,32 @@ export const ActiveWorkoutScreen = ({
 
                   <div className={styles.setFields}>
                     <label className={styles.setField}>
-                      <span className={styles.setLabel}>{messages.repsLabel}</span>
+                      <span className={styles.setLabel}>
+                        {editingSetContext.tracksDuration
+                          ? messages.durationLabel
+                          : messages.repsLabel}
+                      </span>
                       <input
                         className={styles.setInput}
                         type="text"
                         inputMode="numeric"
                         pattern="[0-9]*"
-                        value={setEditDraft.reps}
-                        placeholder={messages.repsPlaceholder}
-                        onChange={(event) => updateSetEditDraft("reps", event.currentTarget.value)}
+                        value={
+                          editingSetContext.tracksDuration
+                            ? setEditDraft.durationSeconds
+                            : setEditDraft.reps
+                        }
+                        placeholder={
+                          editingSetContext.tracksDuration
+                            ? messages.durationPlaceholder
+                            : messages.repsPlaceholder
+                        }
+                        onChange={(event) =>
+                          updateSetEditDraft(
+                            editingSetContext.tracksDuration ? "durationSeconds" : "reps",
+                            event.currentTarget.value,
+                          )
+                        }
                       />
                     </label>
                     <label className={styles.setField}>

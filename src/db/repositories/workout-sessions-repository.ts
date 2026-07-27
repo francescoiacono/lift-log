@@ -54,6 +54,9 @@ export type LogWorkoutSetInput = {
   /** Repetition count completed for the set. */
   reps: number | null;
 
+  /** Hold duration in seconds for timed exercises. */
+  durationSeconds?: number | null;
+
   /** Weight used for the set. */
   weight?: number | null;
 
@@ -71,6 +74,9 @@ export type LogWorkoutSetInput = {
 export type UpdateWorkoutSetInput = {
   /** Repetition count completed for the set. */
   reps: number | null;
+
+  /** Hold duration in seconds for timed exercises. */
+  durationSeconds?: number | null;
 
   /** Weight used for the set. */
   weight?: number | null;
@@ -246,6 +252,7 @@ const createCompletedWorkoutSet = (
     id: createId(),
     order,
     reps: input.reps,
+    durationSeconds: input.durationSeconds ?? null,
     weight: input.weight ?? null,
     weightUnit: input.weightUnit ?? "kg",
     isCompleted: true,
@@ -260,6 +267,7 @@ const updateCompletedWorkoutSet = (set: WorkoutSet, input: UpdateWorkoutSetInput
   return {
     ...set,
     reps: input.reps,
+    durationSeconds: input.durationSeconds ?? null,
     weight: input.weight ?? null,
     weightUnit: input.weightUnit ?? set.weightUnit,
     restSeconds: input.restSeconds ?? null,

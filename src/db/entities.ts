@@ -24,6 +24,12 @@ export type Exercise = {
   /** Equipment required for the exercise, when any. */
   equipment: string | null;
 
+  /**
+   * Whether sets for this exercise are tracked as a timed hold (e.g. planks)
+   * instead of repetitions. Absent is treated as false.
+   */
+  tracksDuration?: boolean;
+
   /** Optional user notes for setup, cues, or substitutions. */
   notes: string | null;
 
@@ -80,6 +86,9 @@ export type WorkoutSet = {
 
   /** Logged repetition count, when entered. */
   reps: number | null;
+
+  /** Logged hold duration in seconds for timed exercises, when entered. */
+  durationSeconds?: number | null;
 
   /** Logged weight, when entered. */
   weight: number | null;

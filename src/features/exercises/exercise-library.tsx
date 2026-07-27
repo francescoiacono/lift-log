@@ -64,6 +64,9 @@ type ExerciseFormState = {
   /** Equipment input value. */
   equipment: string;
 
+  /** Whether sets are tracked as a timed hold instead of repetitions. */
+  tracksDuration: boolean;
+
   /** Notes textarea value. */
   notes: string;
 };
@@ -89,6 +92,7 @@ const createEmptyFormState = (): ExerciseFormState => {
     name: "",
     muscleGroups: "",
     equipment: "",
+    tracksDuration: false,
     notes: "",
   };
 };
@@ -112,6 +116,7 @@ const toFormState = (exercise: Exercise): ExerciseFormState => {
     name: exercise.name,
     muscleGroups: formatMuscleGroups(exercise.muscleGroups),
     equipment: exercise.equipment ?? "",
+    tracksDuration: exercise.tracksDuration ?? false,
     notes: exercise.notes ?? "",
   };
 };
@@ -122,6 +127,7 @@ const toCreateInput = (formState: ExerciseFormState) => {
     name: formState.name.trim(),
     muscleGroups: parseMuscleGroups(formState.muscleGroups),
     equipment: formState.equipment.trim() || null,
+    tracksDuration: formState.tracksDuration,
     notes: formState.notes.trim() || null,
   };
 };
@@ -145,6 +151,15 @@ const formatWeight = (weight: number | null, unit = "kg"): string => {
 /** Formats a set's repetition count for display. */
 const formatReps = (reps: number | null, messages: ExerciseLibraryMessages): string => {
   return reps === null ? messages.noReps : messages.repsValue.replace("{count}", String(reps));
+};
+
+/** Formats a set's primary effort as either a hold duration or a rep count. */
+const formatSetEffort = (set: WorkoutSet, messages: ExerciseLibraryMessages): string => {
+  if (set.durationSeconds != null) {
+    return messages.durationValue.replace("{seconds}", String(set.durationSeconds));
+  }
+
+  return formatReps(set.reps, messages);
 };
 
 /** Formats seconds as a timer duration. */
@@ -336,7 +351,7 @@ export const ExerciseLibrary = ({
   };
 
   /** Updates one field in the exercise form state. */
-  const updateFormField = (field: keyof ExerciseFormState, value: string) => {
+  const updateFormField = (field: keyof ExerciseFormState, value: string | boolean) => {
     setFormState((currentFormState) => ({
       ...currentFormState,
       [field]: value,
@@ -515,7 +530,7 @@ export const ExerciseLibrary = ({
                   : "-"}
               </strong>
               <span className={styles.performanceMeta}>
-                {latestSetEntry ? formatReps(latestSetEntry.set.reps, messages) : messages.noSets}
+                {latestSetEntry ? formatSetEffort(latestSetEntry.set, messages) : messages.noSets}
               </span>
             </div>
             <div className={styles.performanceMetric}>
@@ -553,7 +568,7 @@ export const ExerciseLibrary = ({
                     {formatWeight(entry.set.weight, entry.set.weightUnit)}
                   </span>
                   <span className={styles.recentSetReps}>
-                    {formatReps(entry.set.reps, messages)}
+                    {formatSetEffort(entry.set, messages)}
                   </span>
                 </li>
               ))}
@@ -575,7 +590,7 @@ export const ExerciseLibrary = ({
                 : "-"}
             </strong>
             <span className={styles.detailInfoMeta}>
-              {bestSetEntry ? formatReps(bestSetEntry.set.reps, messages) : messages.noSets}
+              {bestSetEntry ? formatSetEffort(bestSetEntry.set, messages) : messages.noSets}
             </span>
             <span className={styles.detailInfoDate}>
               {bestSetEntry
@@ -671,6 +686,21 @@ export const ExerciseLibrary = ({
                       placeholder={messages.notesPlaceholder}
                       onChange={(event) => updateFormField("notes", event.currentTarget.value)}
                     />
+                  </label>
+
+                  <label className={styles.checkboxField}>
+                    <input
+                      className={styles.checkbox}
+                      type="checkbox"
+                      checked={formState.tracksDuration}
+                      onChange={(event) =>
+                        updateFormField("tracksDuration", event.currentTarget.checked)
+                      }
+                    />
+                    <span className={styles.checkboxText}>
+                      <span className={styles.label}>{messages.tracksDurationLabel}</span>
+                      <span className={styles.checkboxHint}>{messages.tracksDurationHint}</span>
+                    </span>
                   </label>
 
                   <div className={styles.formActions}>
@@ -785,6 +815,21 @@ export const ExerciseLibrary = ({
                     placeholder={messages.notesPlaceholder}
                     onChange={(event) => updateFormField("notes", event.currentTarget.value)}
                   />
+                </label>
+
+                <label className={styles.checkboxField}>
+                  <input
+                    className={styles.checkbox}
+                    type="checkbox"
+                    checked={formState.tracksDuration}
+                    onChange={(event) =>
+                      updateFormField("tracksDuration", event.currentTarget.checked)
+                    }
+                  />
+                  <span className={styles.checkboxText}>
+                    <span className={styles.label}>{messages.tracksDurationLabel}</span>
+                    <span className={styles.checkboxHint}>{messages.tracksDurationHint}</span>
+                  </span>
                 </label>
 
                 <div className={styles.formActions}>

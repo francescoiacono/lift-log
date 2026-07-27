@@ -138,7 +138,11 @@ const formatWorkoutMeta = (session: WorkoutSession, messages: WorkoutHistoryMess
 const formatLoggedSet = (set: WorkoutSet, messages: WorkoutHistoryMessages): string => {
   const setLabel = messages.setNumberLabel.replace("{number}", String(set.order + 1));
   const repsLabel =
-    set.reps === null ? messages.noReps : formatCountMessage(messages.repsCount, set.reps);
+    set.durationSeconds != null
+      ? messages.durationValue.replace("{seconds}", String(set.durationSeconds))
+      : set.reps === null
+        ? messages.noReps
+        : formatCountMessage(messages.repsCount, set.reps);
   const weightLabel =
     set.weight === null
       ? messages.noWeight

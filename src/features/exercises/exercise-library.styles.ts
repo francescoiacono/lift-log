@@ -305,6 +305,30 @@ export const styles = {
       color: "fgSubtle",
     },
   }),
+  checkboxField: css({
+    display: "flex",
+    alignItems: "start",
+    gap: "10px",
+    cursor: "pointer",
+  }),
+  checkbox: css({
+    inlineSize: "20px",
+    blockSize: "20px",
+    marginBlockStart: "2px",
+    flexShrink: "0",
+    accentColor: "token(colors.accent)",
+    cursor: "pointer",
+  }),
+  checkboxText: css({
+    display: "grid",
+    gap: "3px",
+  }),
+  checkboxHint: css({
+    color: "fgMuted",
+    fontSize: "12px",
+    fontWeight: "600",
+    lineHeight: "1.35",
+  }),
   formActions: css({
     display: { base: "grid", sm: "flex" },
     gridTemplateColumns: "1fr",

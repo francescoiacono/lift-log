@@ -32,6 +32,7 @@ const exercise = {
   name: "Bench press",
   muscleGroups: ["Chest"],
   equipment: "Barbell",
+  tracksAssistance: false,
   notes: null,
   createdAt: "2026-05-07T10:00:00.000Z",
   updatedAt: "2026-05-07T10:00:00.000Z",
@@ -74,6 +75,7 @@ describe("createLocalDataRepository", () => {
       id: appSettingsId,
       weightUnit: "kg",
       defaultRestSeconds: 120,
+      weeklyWorkoutTarget: 3,
       createdAt: "2026-05-07T10:00:00.000Z",
       updatedAt: "2026-05-07T10:00:00.000Z",
     } as const;
@@ -138,6 +140,72 @@ describe("createLocalDataRepository", () => {
     await expect(testDatabase.exercises.count()).resolves.toBe(1);
   });
 
+  it("normalizes compatible version 2 exports while importing", async () => {
+    const testDatabase = createTestDatabase();
+    const repository = createLocalDataRepository({ database: testDatabase });
+    const legacyExport = {
+      format: localDataExportFormat,
+      databaseVersion: 2,
+      exportedAt: "2026-05-07T12:00:00.000Z",
+      exercises: [
+        {
+          id: exercise.id,
+          name: exercise.name,
+          muscleGroups: exercise.muscleGroups,
+          equipment: exercise.equipment,
+          notes: exercise.notes,
+          createdAt: exercise.createdAt,
+          updatedAt: exercise.updatedAt,
+        },
+      ],
+      workoutTemplates: [],
+      workoutSessions: [],
+      settings: [
+        {
+          id: appSettingsId,
+          weightUnit: "kg",
+          defaultRestSeconds: 120,
+          createdAt: "2026-05-07T10:00:00.000Z",
+          updatedAt: "2026-05-07T10:00:00.000Z",
+        },
+      ],
+      activeWorkout: [],
+    };
+
+    await repository.importData(legacyExport);
+
+    await expect(testDatabase.exercises.get(exercise.id)).resolves.toMatchObject({
+      tracksAssistance: false,
+    });
+    await expect(testDatabase.settings.get(appSettingsId)).resolves.toMatchObject({
+      weeklyWorkoutTarget: 3,
+    });
+  });
+
+  it("clamps an out-of-range weekly target while importing", async () => {
+    const testDatabase = createTestDatabase();
+    const repository = createLocalDataRepository({ database: testDatabase });
+    const snapshot = await repository.exportData();
+
+    await repository.importData({
+      ...snapshot,
+      settings: [
+        {
+          id: appSettingsId,
+          weightUnit: "kg",
+          defaultRestSeconds: 120,
+          weeklyWorkoutTarget: 99,
+          createdAt: "2026-05-07T10:00:00.000Z",
+          updatedAt: "2026-05-07T10:00:00.000Z",
+        },
+      ],
+    });
+
+    await expect(testDatabase.settings.get(appSettingsId)).resolves.toMatchObject({
+      weeklyWorkoutTarget: 7,
+    });
+  });
+
   it("rejects a file with malformed records before clearing stored data", async () => {
     const testDatabase = createTestDatabase();
     const repository = createLocalDataRepository({ database: testDatabase });
@@ -166,6 +234,7 @@ describe("createLocalDataRepository", () => {
         id: appSettingsId,
         weightUnit: "kg",
         defaultRestSeconds: 120,
+        weeklyWorkoutTarget: 3,
         createdAt: "2026-05-07T10:00:00.000Z",
         updatedAt: "2026-05-07T10:00:00.000Z",
       }),

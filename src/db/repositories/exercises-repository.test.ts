@@ -75,6 +75,7 @@ describe("createExerciseRepository", () => {
       name: "Bench Press",
       muscleGroups: ["chest", "triceps"],
       equipment: "barbell",
+      tracksAssistance: false,
       tracksDuration: false,
       notes: null,
       createdAt: "2026-05-07T10:00:00.000Z",
@@ -93,11 +94,14 @@ describe("createExerciseRepository", () => {
     const exercise = await repository.create({
       name: "Plank",
       muscleGroups: ["core"],
+      tracksAssistance: true,
       tracksDuration: true,
     });
 
     expect(exercise.tracksDuration).toBe(true);
+    expect(exercise.tracksAssistance).toBe(false);
     await expect(repository.getById("exercise-1")).resolves.toMatchObject({
+      tracksAssistance: false,
       tracksDuration: true,
     });
   });

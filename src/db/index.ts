@@ -11,13 +11,20 @@ export { createEntityId, createIsoDateTime } from "./persistence-utils";
 export {
   createExerciseRepository,
   createLocalDataRepository,
+  createSettingsRepository,
   createWorkoutSessionRepository,
   createWorkoutTemplateRepository,
   exerciseRepository,
   localDataExportFormat,
   localDataRepository,
+  settingsRepository,
   workoutSessionRepository,
   workoutTemplateRepository,
+} from "./repositories";
+export {
+  defaultWeeklyWorkoutTarget,
+  maximumWeeklyWorkoutTarget,
+  minimumWeeklyWorkoutTarget,
 } from "./repositories";
 export type {
   ActiveRestTimer,
@@ -42,6 +49,8 @@ export type {
   LocalDataExport,
   LocalDataRepository,
   LocalDataRepositoryOptions,
+  SettingsRepository,
+  SettingsRepositoryOptions,
   ActiveWorkoutSnapshot,
   CreateActiveWorkoutTemplateInput,
   CreateActiveWorkoutTemplateResult,

@@ -105,6 +105,7 @@ const appSettings = {
   id: appSettingsId,
   weightUnit: "kg",
   defaultRestSeconds: 120,
+  weeklyWorkoutTarget: 3,
   createdAt: timestamp,
   updatedAt: timestamp,
 } satisfies AppSettings;
@@ -279,6 +280,44 @@ describe("createLiftLogDatabase", () => {
           restSeconds: null,
         },
       ],
+    });
+  });
+
+  it("adds insight defaults to records from schema version 2", async () => {
+    const legacyName = createTestDatabaseName();
+    const legacyDatabase = new Dexie(legacyName);
+
+    databaseNames.add(legacyName);
+    legacyDatabase.version(2).stores({
+      exercises: "id, name, *muscleGroups, equipment, createdAt, updatedAt",
+      workoutTemplates: "id, name, createdAt, updatedAt",
+      workoutSessions: "id, status, templateId, startedAt, finishedAt, updatedAt",
+      settings: "id, updatedAt",
+      activeWorkout: "id, sessionId, updatedAt",
+    });
+
+    await legacyDatabase.open();
+    await Promise.all([
+      legacyDatabase.table("exercises").add(exercise),
+      legacyDatabase.table("settings").add({
+        id: appSettingsId,
+        weightUnit: "kg",
+        defaultRestSeconds: 120,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }),
+    ]);
+    legacyDatabase.close();
+
+    const migratedDatabase = createTestDatabase(legacyName);
+
+    await migratedDatabase.open();
+
+    await expect(migratedDatabase.exercises.get(exercise.id)).resolves.toMatchObject({
+      tracksAssistance: false,
+    });
+    await expect(migratedDatabase.settings.get(appSettingsId)).resolves.toMatchObject({
+      weeklyWorkoutTarget: 3,
     });
   });
 });

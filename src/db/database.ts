@@ -12,7 +12,7 @@ import type {
 export const databaseName = "lift-log";
 
 /** Current Dexie schema version for the app database. */
-export const databaseVersion = 2;
+export const databaseVersion = 3;
 
 /** Singleton settings record id. */
 export const appSettingsId = "app" satisfies AppSettings["id"];
@@ -31,6 +31,9 @@ const schemaV1 = {
 
 /** Dexie store definitions for the second schema version. */
 const schemaV2 = schemaV1;
+
+/** Dexie store definitions for the third schema version. */
+const schemaV3 = schemaV2;
 
 /** Typed Dexie database containing all local-first app stores. */
 export type LiftLogDatabase = Dexie & {
@@ -59,6 +62,18 @@ const migrateWorkoutSessionExercisePlans = (workoutSession: WorkoutSession): voi
   }));
 };
 
+/** Adds insight preferences to settings records created before schema version 3. */
+const migrateAppSettingsInsights = (settings: AppSettings): void => {
+  settings.weeklyWorkoutTarget ??= 3;
+};
+
+/** Adds exercise progress semantics to records created before schema version 3. */
+const migrateExerciseProgressSemantics = (exercise: Exercise): void => {
+  exercise.tracksAssistance = exercise.tracksDuration
+    ? false
+    : (exercise.tracksAssistance ?? false);
+};
+
 /** Creates a typed Dexie database instance with the current schema applied. */
 export const createLiftLogDatabase = (name = databaseName): LiftLogDatabase => {
   const database = new Dexie(name) as LiftLogDatabase;
@@ -72,6 +87,21 @@ export const createLiftLogDatabase = (name = databaseName): LiftLogDatabase => {
         .table("workoutSessions")
         .toCollection()
         .modify((workoutSession) => migrateWorkoutSessionExercisePlans(workoutSession));
+    });
+  database
+    .version(3)
+    .stores(schemaV3)
+    .upgrade(async (transaction) => {
+      await Promise.all([
+        transaction
+          .table("settings")
+          .toCollection()
+          .modify((settings) => migrateAppSettingsInsights(settings)),
+        transaction
+          .table("exercises")
+          .toCollection()
+          .modify((exercise) => migrateExerciseProgressSemantics(exercise)),
+      ]);
     });
 
   return database;

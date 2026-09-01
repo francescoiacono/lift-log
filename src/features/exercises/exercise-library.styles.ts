@@ -318,6 +318,10 @@ export const styles = {
     flexShrink: "0",
     accentColor: "token(colors.accent)",
     cursor: "pointer",
+    _disabled: {
+      cursor: "not-allowed",
+      opacity: "0.5",
+    },
   }),
   checkboxText: css({
     display: "grid",

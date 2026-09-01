@@ -12,6 +12,13 @@ export {
   createWorkoutSessionRepository,
   workoutSessionRepository,
 } from "./workout-sessions-repository";
+export {
+  createSettingsRepository,
+  defaultWeeklyWorkoutTarget,
+  maximumWeeklyWorkoutTarget,
+  minimumWeeklyWorkoutTarget,
+  settingsRepository,
+} from "./settings-repository";
 export type {
   CreateExerciseInput,
   ExerciseRepository,
@@ -40,3 +47,4 @@ export type {
   WorkoutSessionRepository,
   WorkoutSessionRepositoryOptions,
 } from "./workout-sessions-repository";
+export type { SettingsRepository, SettingsRepositoryOptions } from "./settings-repository";

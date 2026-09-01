@@ -1,4 +1,4 @@
-import { ClipboardList, Dumbbell, History, House } from "lucide-react";
+import { ChartNoAxesCombined, ClipboardList, Dumbbell, House } from "lucide-react";
 import { useState } from "react";
 
 import { styles } from "./app.styles";
@@ -75,7 +75,7 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           type="button"
           onClick={() => setActiveView("history")}
         >
-          <History className={styles.navigationIcon} aria-hidden="true" />
+          <ChartNoAxesCombined className={styles.navigationIcon} aria-hidden="true" />
           <span>{messages.app.historyNav}</span>
         </button>
         <button

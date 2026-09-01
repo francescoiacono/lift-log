@@ -97,6 +97,8 @@ Technical direction:
 - Use Dexie with typed string IDs and ISO timestamp strings for local-first persisted records.
 - Keep IndexedDB schema changes versioned in `src/db/database.ts`; add migrations instead of mutating existing schema versions once data may exist.
 - Access persisted data through typed repositories instead of using Dexie tables directly from UI components.
+- Derive progress insights from finished sessions at read time; do not persist denormalized chart or personal-record data.
+- Store the weekly workout target in app settings and interpret `tracksAssistance` exercises as improving when logged assistance decreases.
 - Put locale configuration, message dictionaries, and lightweight i18n helpers under `src/i18n/`.
 - Put shared reusable UI under `src/components/` only when it is genuinely useful across multiple features.
 - Put shared types under the relevant feature first; promote to `src/types/` only when used across unrelated features.

@@ -30,6 +30,9 @@ export type Exercise = {
    */
   tracksDuration?: boolean;
 
+  /** Whether logged weight represents assistance, where a lower value indicates progress. */
+  tracksAssistance?: boolean;
+
   /** Optional user notes for setup, cues, or substitutions. */
   notes: string | null;
 
@@ -173,6 +176,9 @@ export type AppSettings = {
 
   /** Default rest duration offered after completing a set. */
   defaultRestSeconds: number;
+
+  /** Number of finished workouts the user aims to complete each calendar week. */
+  weeklyWorkoutTarget: number;
 
   /** Timestamp for when the settings record was created. */
   createdAt: IsoDateTime;

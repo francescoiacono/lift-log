@@ -8,6 +8,7 @@ import type {
   WorkoutTemplate,
 } from "../entities";
 import { createIsoDateTime } from "../persistence-utils";
+import { normalizeWeeklyWorkoutTarget } from "./settings-repository";
 
 /** Format marker used by Lift Log local data export files. */
 export const localDataExportFormat = "lift-log.local-data-export";
@@ -48,6 +49,9 @@ const localDataExportStoreKeys = [
   "activeWorkout",
 ] as const satisfies readonly (keyof LocalDataExport)[];
 
+/** Oldest export schema that can be normalized into the current data model. */
+const minimumCompatibleDatabaseVersion = 2;
+
 /** Checks that an untrusted store record is an object carrying a string id key. */
 const hasStringId = (record: unknown): boolean => {
   return (
@@ -67,7 +71,9 @@ const isLocalDataExport = (value: unknown): value is LocalDataExport => {
 
   return (
     candidate.format === localDataExportFormat &&
-    candidate.databaseVersion === databaseVersion &&
+    typeof candidate.databaseVersion === "number" &&
+    candidate.databaseVersion >= minimumCompatibleDatabaseVersion &&
+    candidate.databaseVersion <= databaseVersion &&
     // Every store must be an array of records that Dexie can key by a string id,
     // so a malformed file is rejected before the destructive clear+load runs.
     localDataExportStoreKeys.every(
@@ -172,8 +178,20 @@ export const createLocalDataRepository = ({
           ]);
           await Promise.all([
             database.activeWorkout.bulkPut(data.activeWorkout),
-            database.exercises.bulkPut(data.exercises),
-            database.settings.bulkPut(data.settings),
+            database.exercises.bulkPut(
+              data.exercises.map((exercise) => ({
+                ...exercise,
+                tracksAssistance: exercise.tracksDuration
+                  ? false
+                  : (exercise.tracksAssistance ?? false),
+              })),
+            ),
+            database.settings.bulkPut(
+              data.settings.map((settings) => ({
+                ...settings,
+                weeklyWorkoutTarget: normalizeWeeklyWorkoutTarget(settings.weeklyWorkoutTarget),
+              })),
+            ),
             database.workoutSessions.bulkPut(data.workoutSessions),
             database.workoutTemplates.bulkPut(data.workoutTemplates),
           ]);

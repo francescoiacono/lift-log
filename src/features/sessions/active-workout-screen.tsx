@@ -2,34 +2,33 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   Check,
   CheckCircle2,
+  CalendarDays,
   ChevronDown,
   ChevronRight,
   CirclePlus,
   ClipboardList,
   Dumbbell,
-  Flame,
   History,
+  ListChecks,
   MoreVertical,
+  Star,
   Timer,
   TrendingUp,
-  Trophy,
   Trash2,
   X,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-import {
-  calculateTrainingDayStreak,
-  findLastSessionSets,
-  type LastSessionSets,
-} from "./active-workout-dashboard-metrics";
+import { findLastSessionSets, type LastSessionSets } from "./active-workout-dashboard-metrics";
 import { styles } from "./active-workout-screen.styles";
 import type {
   ActiveRestTimer,
+  AppSettings,
   ActiveWorkoutSnapshot,
   EntityId,
   Exercise,
   ExerciseRepository,
+  SettingsRepository,
   WorkoutSet,
   WorkoutSession,
   WorkoutSessionExercise,
@@ -37,7 +36,18 @@ import type {
   WorkoutTemplate,
   WorkoutTemplateRepository,
 } from "@/db";
-import { exerciseRepository, workoutSessionRepository, workoutTemplateRepository } from "@/db";
+import {
+  defaultWeeklyWorkoutTarget,
+  exerciseRepository,
+  settingsRepository,
+  workoutSessionRepository,
+  workoutTemplateRepository,
+} from "@/db";
+import {
+  buildExerciseProgress,
+  buildWeeklyTrainingSummaries,
+  getDaysSinceLastWorkout,
+} from "@/features/history";
 import type { Messages } from "@/i18n";
 
 /** Message dictionary used by the active workout feature. */
@@ -62,6 +72,9 @@ export type ActiveWorkoutScreenProps = {
 
   /** Repository used to read exercise names for session entries. */
   exerciseStore?: ExerciseRepository;
+
+  /** Repository used to load dashboard insight preferences. */
+  settingsStore?: SettingsRepository;
 
   /** Called when the user wants to inspect saved workout history. */
   onOpenHistory?: () => void;
@@ -235,34 +248,28 @@ const countWorkoutSets = (session: WorkoutSession): number => {
   return session.exercises.reduce((totalSets, exercise) => totalSets + exercise.sets.length, 0);
 };
 
-/** Calculates total logged training volume for a workout session. */
-const calculateWorkoutVolume = (session: WorkoutSession): number => {
-  return session.exercises.reduce((sessionVolume, exercise) => {
-    const exerciseVolume = exercise.sets.reduce((setVolume, set) => {
-      return setVolume + (set.weight ?? 0) * (set.reps ?? 0);
-    }, 0);
-
-    return sessionVolume + exerciseVolume;
-  }, 0);
-};
-
-/** Returns whether a session started inside the current calendar week. */
-const isSessionFromCurrentWeek = (session: WorkoutSession, now = new Date()): boolean => {
-  const sessionDate = new Date(session.startedAt);
-  const weekStart = new Date(now);
-  const dayOffset = (weekStart.getDay() + 6) % 7;
-
-  weekStart.setHours(0, 0, 0, 0);
-  weekStart.setDate(weekStart.getDate() - dayOffset);
-
-  return sessionDate >= weekStart && sessionDate <= now;
-};
-
 /** Formats a compact numeric stat for dashboard cards. */
 const formatDashboardNumber = (value: number): string => {
   return new Intl.NumberFormat(undefined, {
     maximumFractionDigits: 0,
   }).format(value);
+};
+
+/** Formats the last-workout recency shown on the dashboard. */
+const formatLastWorkoutRecency = (days: number | null, messages: ActiveWorkoutMessages): string => {
+  if (days === null) {
+    return messages.lastWorkoutNone;
+  }
+
+  if (days === 0) {
+    return messages.lastWorkoutToday;
+  }
+
+  if (days === 1) {
+    return messages.lastWorkoutYesterday;
+  }
+
+  return messages.lastWorkoutDays.replace("{days}", String(days));
 };
 
 /** Calculates percent completion for the active workout card. */
@@ -454,6 +461,7 @@ export const ActiveWorkoutScreen = ({
   repository = workoutSessionRepository,
   templateRepository = workoutTemplateRepository,
   exerciseStore = exerciseRepository,
+  settingsStore = settingsRepository,
   onOpenHistory,
   onInitialFeedbackShown,
 }: ActiveWorkoutScreenProps) => {
@@ -461,6 +469,8 @@ export const ActiveWorkoutScreen = ({
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
   const [finishedSessions, setFinishedSessions] = useState<WorkoutSession[]>([]);
+  const [settings, setSettings] = useState<AppSettings | undefined>();
+  const [recentPersonalRecords, setRecentPersonalRecords] = useState<string[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(initialFeedbackMessage);
   const [isStartingWorkout, setIsStartingWorkout] = useState(false);
@@ -515,18 +525,17 @@ export const ActiveWorkoutScreen = ({
   const canAddExercise = activeSession !== undefined && availableExercises.length > 0;
   const canSaveActiveWorkoutAsPlan =
     activeSession !== undefined && activeSession.templateId === null && sessionExercises.length > 0;
-  const weekSessions = useMemo(() => {
-    return finishedSessions.filter((session) => isSessionFromCurrentWeek(session));
-  }, [finishedSessions]);
-  const weekVolume = useMemo(() => {
-    return weekSessions.reduce(
-      (totalVolume, session) => totalVolume + calculateWorkoutVolume(session),
-      0,
-    );
-  }, [weekSessions]);
-  const trainingDayStreak = useMemo(() => {
-    return calculateTrainingDayStreak(finishedSessions);
-  }, [finishedSessions]);
+  const currentWeekSummary = useMemo(() => {
+    return buildWeeklyTrainingSummaries(finishedSessions, {
+      numberOfWeeks: 1,
+      weightUnit: settings?.weightUnit ?? "kg",
+    })[0];
+  }, [finishedSessions, settings?.weightUnit]);
+  const daysSinceLastWorkout = useMemo(
+    () => getDaysSinceLastWorkout(finishedSessions),
+    [finishedSessions],
+  );
+  const weeklyWorkoutTarget = settings?.weeklyWorkoutTarget ?? defaultWeeklyWorkoutTarget;
   const primaryTemplate = templates[0];
   const dashboardWorkoutName =
     activeSession?.name ?? primaryTemplate?.name ?? messages.dashboardWorkoutFallback;
@@ -565,23 +574,26 @@ export const ActiveWorkoutScreen = ({
   /** Refreshes the active workout and exercise names from IndexedDB. */
   const refreshData = useCallback(async () => {
     try {
-      const [nextSnapshot, nextExercises, nextTemplates, nextFinishedSessions] = await Promise.all([
-        repository.getActive(),
-        exerciseStore.list(),
-        templateRepository.list(),
-        repository.listFinished(),
-      ]);
+      const [nextSnapshot, nextExercises, nextTemplates, nextFinishedSessions, nextSettings] =
+        await Promise.all([
+          repository.getActive(),
+          exerciseStore.list(),
+          templateRepository.list(),
+          repository.listFinished(),
+          settingsStore.get(),
+        ]);
 
       setSnapshot(nextSnapshot);
       setExercises(nextExercises);
       setTemplates(nextTemplates);
       setFinishedSessions(nextFinishedSessions);
+      setSettings(nextSettings);
       setLoadState("ready");
     } catch {
       setLoadState("error");
       setFeedbackMessage(messages.loadError);
     }
-  }, [exerciseStore, messages.loadError, repository, templateRepository]);
+  }, [exerciseStore, messages.loadError, repository, settingsStore, templateRepository]);
 
   useEffect(() => {
     if (isActive) {
@@ -601,6 +613,7 @@ export const ActiveWorkoutScreen = ({
     setSavePlanName("");
     setSetEditDraft(createEmptySetDraft());
     setFeedbackMessage(null);
+    setRecentPersonalRecords([]);
   }, [isActive]);
 
   useEffect(() => {
@@ -663,6 +676,22 @@ export const ActiveWorkoutScreen = ({
           finishedWorkout,
           ...currentSessions.filter((session) => session.id !== finishedWorkout.id),
         ]),
+      );
+      setRecentPersonalRecords(
+        finishedWorkout.exercises.flatMap((sessionExercise) => {
+          const exercise = exerciseById.get(sessionExercise.exerciseId);
+
+          if (!exercise) {
+            return [];
+          }
+
+          const progress = buildExerciseProgress(exercise, [...finishedSessions, finishedWorkout]);
+          const finishedPoint = progress.points.find(
+            (point) => point.sessionId === finishedWorkout.id,
+          );
+
+          return finishedPoint?.isPersonalRecord ? [exercise.name] : [];
+        }),
       );
       setFeedbackMessage(messages.finishSuccess);
     } catch {
@@ -1111,6 +1140,25 @@ export const ActiveWorkoutScreen = ({
 
       {feedbackMessage ? <p className={styles.feedback}>{feedbackMessage}</p> : null}
 
+      {recentPersonalRecords.length > 0 && !activeSession ? (
+        <article className={styles.personalRecordCard}>
+          <Star className={styles.personalRecordIcon} aria-hidden="true" />
+          <div className={styles.personalRecordText}>
+            <strong className={styles.personalRecordTitle}>{messages.workoutPrTitle}</strong>
+            <span className={styles.personalRecordDescription}>
+              {messages.workoutPrDescription}
+            </span>
+            <span className={styles.personalRecordList}>
+              {recentPersonalRecords.map((exerciseName, index) => (
+                <span className={styles.personalRecordBadge} key={`${exerciseName}-${index}`}>
+                  {exerciseName}
+                </span>
+              ))}
+            </span>
+          </div>
+        </article>
+      ) : null}
+
       {loadState === "ready" ? (
         <div className={styles.dashboard}>
           <section className={styles.dashboardSection} aria-labelledby="today-workout-title">
@@ -1168,21 +1216,26 @@ export const ActiveWorkoutScreen = ({
               <article className={styles.statCard}>
                 <TrendingUp className={styles.statIcon({ tone: "accent" })} aria-hidden="true" />
                 <strong className={styles.statValue}>
-                  {formatDashboardNumber(weekSessions.length)}
+                  {formatDashboardNumber(currentWeekSummary?.sessionCount ?? 0)}/
+                  {formatDashboardNumber(weeklyWorkoutTarget)}
                 </strong>
-                <span className={styles.statLabel}>{messages.workoutsStatLabel}</span>
+                <span className={styles.statLabel}>{messages.weeklyGoalStatLabel}</span>
               </article>
               <article className={styles.statCard}>
-                <Dumbbell className={styles.statIcon({ tone: "blue" })} aria-hidden="true" />
-                <strong className={styles.statValue}>{formatDashboardNumber(weekVolume)}</strong>
-                <span className={styles.statLabel}>{messages.volumeStatLabel}</span>
-              </article>
-              <article className={styles.statCard}>
-                <Flame className={styles.statIcon({ tone: "orange" })} aria-hidden="true" />
+                <ListChecks className={styles.statIcon({ tone: "blue" })} aria-hidden="true" />
                 <strong className={styles.statValue}>
-                  {formatDashboardNumber(trainingDayStreak)}
+                  {formatDashboardNumber(currentWeekSummary?.completedSetCount ?? 0)}
                 </strong>
-                <span className={styles.statLabel}>{messages.streakStatLabel}</span>
+                <span className={styles.statLabel}>{messages.setsStatLabel}</span>
+              </article>
+              <article className={styles.statCard}>
+                <Dumbbell className={styles.statIcon({ tone: "orange" })} aria-hidden="true" />
+                <strong className={styles.statValue}>
+                  {formatDashboardNumber(currentWeekSummary?.volume ?? 0)}
+                </strong>
+                <span className={styles.statLabel}>
+                  {messages.volumeStatLabel.replace("{unit}", settings?.weightUnit ?? "kg")}
+                </span>
               </article>
             </div>
           </section>
@@ -1193,14 +1246,11 @@ export const ActiveWorkoutScreen = ({
             onClick={onOpenHistory}
             disabled={!onOpenHistory}
           >
-            <Trophy className={styles.streakIcon} aria-hidden="true" />
+            <CalendarDays className={styles.streakIcon} aria-hidden="true" />
             <span className={styles.streakText}>
-              <span className={styles.streakTitle}>{messages.streakCardTitle}</span>
+              <span className={styles.streakTitle}>{messages.lastWorkoutCardTitle}</span>
               <span className={styles.streakDescription}>
-                {messages.streakCardDescription.replace(
-                  "{days}",
-                  formatDashboardNumber(trainingDayStreak),
-                )}
+                {formatLastWorkoutRecency(daysSinceLastWorkout, messages)}
               </span>
             </span>
             <ChevronRight className={styles.todayWorkoutChevron} aria-hidden="true" />

@@ -1,8 +1,10 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
+import * as Tabs from "@radix-ui/react-tabs";
 import { Check, ChevronDown, ClipboardList, History, RotateCcw, Trash2, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { ProgressOverview } from "./progress-overview";
 import { styles } from "./workout-history.styles";
 import {
   calculateSessionVolume,
@@ -11,15 +13,17 @@ import {
   type WorkoutDateGroup,
 } from "./workout-history-metrics";
 import type {
+  AppSettings,
   EntityId,
   Exercise,
   ExerciseRepository,
+  SettingsRepository,
   WorkoutSession,
   WorkoutSessionExercise,
   WorkoutSessionRepository,
   WorkoutSet,
 } from "@/db";
-import { exerciseRepository, workoutSessionRepository } from "@/db";
+import { exerciseRepository, settingsRepository, workoutSessionRepository } from "@/db";
 import type { Messages } from "@/i18n";
 
 /** Message dictionary used by the workout history feature. */
@@ -38,6 +42,9 @@ export type WorkoutHistoryProps = {
 
   /** Repository used to read exercise names for saved sessions. */
   exerciseStore?: ExerciseRepository;
+
+  /** Repository used to load and update progress preferences. */
+  settingsStore?: SettingsRepository;
 
   /** Called after a workout session has been started from history. */
   onSessionStarted?: () => void;
@@ -195,11 +202,13 @@ export const WorkoutHistory = ({
   isActive = true,
   repository = workoutSessionRepository,
   exerciseStore = exerciseRepository,
+  settingsStore = settingsRepository,
   onSessionStarted,
 }: WorkoutHistoryProps) => {
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [exercises, setExercises] = useState<Exercise[]>([]);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [openSessionId, setOpenSessionId] = useState<EntityId | null>(null);
   const hasInitializedOpenSessionRef = useRef(false);
   const previousSessionCountRef = useRef(0);
@@ -220,7 +229,7 @@ export const WorkoutHistory = ({
     thisWeek: messages.groupThisWeek,
     earlier: messages.groupEarlier,
   };
-  const sessionGroups = useMemo(() => groupSessionsByRecency(sessions), [sessions]);
+  const sessionGroups = useMemo(() => groupSessionsByRecency(sessions.slice(0, 50)), [sessions]);
   const planSourceSession = useMemo(() => {
     return sessions.find((session) => session.id === planSourceSessionId);
   }, [planSourceSessionId, sessions]);
@@ -231,10 +240,11 @@ export const WorkoutHistory = ({
   /** Refreshes saved workout sessions and exercise names from IndexedDB. */
   const refreshData = useCallback(async () => {
     try {
-      const [nextSessions, nextExercises, nextCount] = await Promise.all([
-        repository.listFinished(50),
+      const [nextSessions, nextExercises, nextCount, nextSettings] = await Promise.all([
+        repository.listFinished(),
         exerciseStore.list(),
         repository.countFinished(),
+        settingsStore.get(),
       ]);
 
       const shouldOpenFirstSession =
@@ -243,6 +253,7 @@ export const WorkoutHistory = ({
       setSessions(nextSessions);
       setTotalCount(nextCount);
       setExercises(nextExercises);
+      setSettings(nextSettings);
       setOpenSessionId((currentOpenSessionId) => {
         if (currentOpenSessionId === null) {
           return shouldOpenFirstSession ? (nextSessions[0]?.id ?? null) : null;
@@ -259,7 +270,7 @@ export const WorkoutHistory = ({
       setLoadState("error");
       setFeedbackMessage(messages.loadError);
     }
-  }, [exerciseStore, messages.loadError, repository]);
+  }, [exerciseStore, messages.loadError, repository, settingsStore]);
 
   useEffect(() => {
     if (isActive) {
@@ -425,6 +436,15 @@ export const WorkoutHistory = ({
     }
   };
 
+  /** Persists a new weekly workout target and refreshes its local display. */
+  const updateWeeklyWorkoutTarget = async (target: number) => {
+    try {
+      setSettings(await settingsStore.updateWeeklyWorkoutTarget(target));
+    } catch {
+      setFeedbackMessage(messages.settingsSaveError);
+    }
+  };
+
   return (
     <section className={styles.root} aria-labelledby="workout-history-title">
       <header className={styles.header}>
@@ -461,198 +481,226 @@ export const WorkoutHistory = ({
         </div>
       ) : null}
 
-      {loadState === "ready" && sessions.length > 0 ? (
-        <div className={styles.groupList}>
-          {sessionGroups.map((group) => (
-            <section className={styles.group} key={group.key}>
-              <h2 className={styles.groupHeading}>{groupHeadings[group.key]}</h2>
-              <ul className={styles.sessionList}>
-                {group.sessions.map((session) => {
-                  const sessionName = formatSessionTitle(session.name, messages);
-                  const isOpen = openSessionId === session.id;
-                  const sessionExercises = sortSessionExercises(session.exercises);
+      {loadState === "ready" && sessions.length > 0 && settings ? (
+        <Tabs.Root className={styles.tabsRoot} defaultValue="overview">
+          <Tabs.List className={styles.tabsList} aria-label={messages.progressTabsLabel}>
+            <Tabs.Trigger className={styles.tabTrigger} value="overview">
+              {messages.overviewTab}
+            </Tabs.Trigger>
+            <Tabs.Trigger className={styles.tabTrigger} value="workouts">
+              {messages.workoutsTab}
+            </Tabs.Trigger>
+          </Tabs.List>
 
-                  return (
-                    <li className={styles.sessionCard} key={session.id}>
-                      <button
-                        className={styles.sessionToggle}
-                        type="button"
-                        aria-expanded={isOpen}
-                        aria-label={formatWorkoutToggleLabel(
-                          isOpen
-                            ? messages.collapseWorkoutAriaLabel
-                            : messages.expandWorkoutAriaLabel,
-                          sessionName,
-                        )}
-                        onClick={() => toggleSession(session.id)}
-                      >
-                        <span className={styles.sessionHeading}>
-                          <span className={styles.sessionName}>{sessionName}</span>
-                          <span className={styles.sessionMeta}>
-                            {formatWorkoutMeta(session, messages)}
-                          </span>
-                        </span>
-                        <ChevronDown
-                          className={styles.chevron({ open: isOpen })}
-                          aria-hidden="true"
-                        />
-                      </button>
+          <Tabs.Content className={styles.tabContent} value="overview">
+            <ProgressOverview
+              sessions={sessions}
+              exercises={exercises}
+              settings={settings}
+              messages={messages}
+              onWeeklyTargetChange={updateWeeklyWorkoutTarget}
+            />
+          </Tabs.Content>
 
-                      {isOpen ? (
-                        <div className={styles.sessionDetails}>
-                          <div className={styles.sessionActions}>
-                            <button
-                              aria-label={formatWorkoutActionLabel(
-                                messages.repeatWorkoutAriaLabel,
-                                sessionName,
-                              )}
-                              className={styles.button({ variant: "primary" })}
-                              type="button"
-                              disabled={
-                                session.exercises.length === 0 || repeatingSessionId === session.id
-                              }
-                              onClick={() => void repeatWorkout(session)}
-                            >
-                              <RotateCcw className={styles.icon} aria-hidden="true" />
-                              <span>
-                                {repeatingSessionId === session.id
-                                  ? messages.repeatingAction
-                                  : messages.repeatAction}
+          <Tabs.Content className={styles.tabContent} value="workouts">
+            <div className={styles.groupList}>
+              {sessionGroups.map((group) => (
+                <section className={styles.group} key={group.key}>
+                  <h2 className={styles.groupHeading}>{groupHeadings[group.key]}</h2>
+                  <ul className={styles.sessionList}>
+                    {group.sessions.map((session) => {
+                      const sessionName = formatSessionTitle(session.name, messages);
+                      const isOpen = openSessionId === session.id;
+                      const sessionExercises = sortSessionExercises(session.exercises);
+
+                      return (
+                        <li className={styles.sessionCard} key={session.id}>
+                          <button
+                            className={styles.sessionToggle}
+                            type="button"
+                            aria-expanded={isOpen}
+                            aria-label={formatWorkoutToggleLabel(
+                              isOpen
+                                ? messages.collapseWorkoutAriaLabel
+                                : messages.expandWorkoutAriaLabel,
+                              sessionName,
+                            )}
+                            onClick={() => toggleSession(session.id)}
+                          >
+                            <span className={styles.sessionHeading}>
+                              <span className={styles.sessionName}>{sessionName}</span>
+                              <span className={styles.sessionMeta}>
+                                {formatWorkoutMeta(session, messages)}
                               </span>
-                            </button>
-                            <button
-                              aria-label={formatWorkoutActionLabel(
-                                messages.saveWorkoutAsPlanAriaLabel,
-                                sessionName,
-                              )}
-                              className={styles.button({ variant: "secondary" })}
-                              type="button"
-                              disabled={session.exercises.length === 0 || isSavingPlan}
-                              onClick={() => openSavePlanDialog(session)}
-                            >
-                              <ClipboardList className={styles.icon} aria-hidden="true" />
-                              <span>{messages.saveAsPlanAction}</span>
-                            </button>
-                            <AlertDialog.Root
-                              open={pendingDeleteSessionId === session.id}
-                              onOpenChange={(isOpen) => updateDeleteDialog(isOpen, session.id)}
-                            >
-                              <AlertDialog.Trigger asChild>
+                            </span>
+                            <ChevronDown
+                              className={styles.chevron({ open: isOpen })}
+                              aria-hidden="true"
+                            />
+                          </button>
+
+                          {isOpen ? (
+                            <div className={styles.sessionDetails}>
+                              <div className={styles.sessionActions}>
                                 <button
                                   aria-label={formatWorkoutActionLabel(
-                                    messages.deleteWorkoutAriaLabel,
+                                    messages.repeatWorkoutAriaLabel,
                                     sessionName,
                                   )}
-                                  className={styles.button({ variant: "danger" })}
+                                  className={styles.button({ variant: "primary" })}
                                   type="button"
-                                  disabled={deletingSessionId === session.id}
+                                  disabled={
+                                    session.exercises.length === 0 ||
+                                    repeatingSessionId === session.id
+                                  }
+                                  onClick={() => void repeatWorkout(session)}
                                 >
-                                  <Trash2 className={styles.icon} aria-hidden="true" />
+                                  <RotateCcw className={styles.icon} aria-hidden="true" />
                                   <span>
-                                    {deletingSessionId === session.id
-                                      ? messages.deletingAction
-                                      : messages.deleteAction}
+                                    {repeatingSessionId === session.id
+                                      ? messages.repeatingAction
+                                      : messages.repeatAction}
                                   </span>
                                 </button>
-                              </AlertDialog.Trigger>
+                                <button
+                                  aria-label={formatWorkoutActionLabel(
+                                    messages.saveWorkoutAsPlanAriaLabel,
+                                    sessionName,
+                                  )}
+                                  className={styles.button({ variant: "secondary" })}
+                                  type="button"
+                                  disabled={session.exercises.length === 0 || isSavingPlan}
+                                  onClick={() => openSavePlanDialog(session)}
+                                >
+                                  <ClipboardList className={styles.icon} aria-hidden="true" />
+                                  <span>{messages.saveAsPlanAction}</span>
+                                </button>
+                                <AlertDialog.Root
+                                  open={pendingDeleteSessionId === session.id}
+                                  onOpenChange={(isOpen) => updateDeleteDialog(isOpen, session.id)}
+                                >
+                                  <AlertDialog.Trigger asChild>
+                                    <button
+                                      aria-label={formatWorkoutActionLabel(
+                                        messages.deleteWorkoutAriaLabel,
+                                        sessionName,
+                                      )}
+                                      className={styles.button({ variant: "danger" })}
+                                      type="button"
+                                      disabled={deletingSessionId === session.id}
+                                    >
+                                      <Trash2 className={styles.icon} aria-hidden="true" />
+                                      <span>
+                                        {deletingSessionId === session.id
+                                          ? messages.deletingAction
+                                          : messages.deleteAction}
+                                      </span>
+                                    </button>
+                                  </AlertDialog.Trigger>
 
-                              <AlertDialog.Portal>
-                                <AlertDialog.Overlay className={styles.dialogOverlay} />
-                                <div className={styles.dialogViewport}>
-                                  <AlertDialog.Content className={styles.dialogContent}>
-                                    <AlertDialog.Title className={styles.dialogTitle}>
-                                      {messages.deleteConfirmTitle}
-                                    </AlertDialog.Title>
-                                    <AlertDialog.Description className={styles.dialogDescription}>
-                                      <strong>{sessionName}</strong>
-                                      <span>{messages.deleteConfirmDescription}</span>
-                                    </AlertDialog.Description>
-                                    <div className={styles.dialogActions}>
-                                      <AlertDialog.Action asChild>
-                                        <button
-                                          className={styles.button({ variant: "danger" })}
-                                          type="button"
-                                          disabled={deletingSessionId === session.id}
-                                          onClick={(event) => {
-                                            event.preventDefault();
-                                            void deleteWorkout(session);
-                                          }}
+                                  <AlertDialog.Portal>
+                                    <AlertDialog.Overlay className={styles.dialogOverlay} />
+                                    <div className={styles.dialogViewport}>
+                                      <AlertDialog.Content className={styles.dialogContent}>
+                                        <AlertDialog.Title className={styles.dialogTitle}>
+                                          {messages.deleteConfirmTitle}
+                                        </AlertDialog.Title>
+                                        <AlertDialog.Description
+                                          className={styles.dialogDescription}
                                         >
-                                          <Trash2 className={styles.icon} aria-hidden="true" />
-                                          <span>{messages.deleteConfirmAction}</span>
-                                        </button>
-                                      </AlertDialog.Action>
-                                      <AlertDialog.Cancel asChild>
-                                        <button
-                                          className={styles.button({ variant: "secondary" })}
-                                          type="button"
-                                          disabled={deletingSessionId === session.id}
-                                        >
-                                          {messages.deleteCancelAction}
-                                        </button>
-                                      </AlertDialog.Cancel>
+                                          <strong>{sessionName}</strong>
+                                          <span>{messages.deleteConfirmDescription}</span>
+                                        </AlertDialog.Description>
+                                        <div className={styles.dialogActions}>
+                                          <AlertDialog.Action asChild>
+                                            <button
+                                              className={styles.button({ variant: "danger" })}
+                                              type="button"
+                                              disabled={deletingSessionId === session.id}
+                                              onClick={(event) => {
+                                                event.preventDefault();
+                                                void deleteWorkout(session);
+                                              }}
+                                            >
+                                              <Trash2 className={styles.icon} aria-hidden="true" />
+                                              <span>{messages.deleteConfirmAction}</span>
+                                            </button>
+                                          </AlertDialog.Action>
+                                          <AlertDialog.Cancel asChild>
+                                            <button
+                                              className={styles.button({ variant: "secondary" })}
+                                              type="button"
+                                              disabled={deletingSessionId === session.id}
+                                            >
+                                              {messages.deleteCancelAction}
+                                            </button>
+                                          </AlertDialog.Cancel>
+                                        </div>
+                                      </AlertDialog.Content>
                                     </div>
-                                  </AlertDialog.Content>
-                                </div>
-                              </AlertDialog.Portal>
-                            </AlertDialog.Root>
-                          </div>
+                                  </AlertDialog.Portal>
+                                </AlertDialog.Root>
+                              </div>
 
-                          {sessionExercises.length === 0 ? (
-                            <p className={styles.emptyDetail}>{messages.noExercises}</p>
-                          ) : (
-                            <ul className={styles.exerciseList}>
-                              {sessionExercises.map((sessionExercise) => {
-                                const exercise = exerciseById.get(sessionExercise.exerciseId);
-                                const sets = sortWorkoutSets(sessionExercise.sets);
+                              {sessionExercises.length === 0 ? (
+                                <p className={styles.emptyDetail}>{messages.noExercises}</p>
+                              ) : (
+                                <ul className={styles.exerciseList}>
+                                  {sessionExercises.map((sessionExercise) => {
+                                    const exercise = exerciseById.get(sessionExercise.exerciseId);
+                                    const sets = sortWorkoutSets(sessionExercise.sets);
 
-                                return (
-                                  <li
-                                    className={styles.exerciseCard}
-                                    key={sessionExercise.exerciseId}
-                                  >
-                                    <div className={styles.exerciseHeading}>
-                                      <h3 className={styles.exerciseName}>
-                                        {exercise?.name ?? messages.missingExercise}
-                                      </h3>
-                                      <p className={styles.exerciseMeta}>
-                                        {formatSetCount(sets.length, messages)}
-                                      </p>
-                                    </div>
+                                    return (
+                                      <li
+                                        className={styles.exerciseCard}
+                                        key={sessionExercise.exerciseId}
+                                      >
+                                        <div className={styles.exerciseHeading}>
+                                          <h3 className={styles.exerciseName}>
+                                            {exercise?.name ?? messages.missingExercise}
+                                          </h3>
+                                          <p className={styles.exerciseMeta}>
+                                            {formatSetCount(sets.length, messages)}
+                                          </p>
+                                        </div>
 
-                                    {sets.length === 0 ? (
-                                      <p className={styles.emptyDetail}>
-                                        {messages.noExerciseSets}
-                                      </p>
-                                    ) : (
-                                      <ol className={styles.setList}>
-                                        {sets.map((set) => (
-                                          <li
-                                            className={styles.setRow({ skipped: !set.isCompleted })}
-                                            key={set.id}
-                                          >
-                                            {formatLoggedSet(set, messages)}
-                                            {set.isCompleted
-                                              ? null
-                                              : ` · ${messages.setSkippedLabel}`}
-                                          </li>
-                                        ))}
-                                      </ol>
-                                    )}
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          )}
-                        </div>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          ))}
-        </div>
+                                        {sets.length === 0 ? (
+                                          <p className={styles.emptyDetail}>
+                                            {messages.noExerciseSets}
+                                          </p>
+                                        ) : (
+                                          <ol className={styles.setList}>
+                                            {sets.map((set) => (
+                                              <li
+                                                className={styles.setRow({
+                                                  skipped: !set.isCompleted,
+                                                })}
+                                                key={set.id}
+                                              >
+                                                {formatLoggedSet(set, messages)}
+                                                {set.isCompleted
+                                                  ? null
+                                                  : ` · ${messages.setSkippedLabel}`}
+                                              </li>
+                                            ))}
+                                          </ol>
+                                        )}
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              )}
+                            </div>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              ))}
+            </div>
+          </Tabs.Content>
+        </Tabs.Root>
       ) : null}
 
       <Dialog.Root open={isPlanDialogOpen} onOpenChange={updateSavePlanDialog}>

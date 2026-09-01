@@ -67,6 +67,9 @@ type ExerciseFormState = {
   /** Whether sets are tracked as a timed hold instead of repetitions. */
   tracksDuration: boolean;
 
+  /** Whether logged weight represents assistance rather than resistance. */
+  tracksAssistance: boolean;
+
   /** Notes textarea value. */
   notes: string;
 };
@@ -92,6 +95,7 @@ const createEmptyFormState = (): ExerciseFormState => {
     name: "",
     muscleGroups: "",
     equipment: "",
+    tracksAssistance: false,
     tracksDuration: false,
     notes: "",
   };
@@ -116,6 +120,7 @@ const toFormState = (exercise: Exercise): ExerciseFormState => {
     name: exercise.name,
     muscleGroups: formatMuscleGroups(exercise.muscleGroups),
     equipment: exercise.equipment ?? "",
+    tracksAssistance: exercise.tracksAssistance ?? false,
     tracksDuration: exercise.tracksDuration ?? false,
     notes: exercise.notes ?? "",
   };
@@ -127,6 +132,7 @@ const toCreateInput = (formState: ExerciseFormState) => {
     name: formState.name.trim(),
     muscleGroups: parseMuscleGroups(formState.muscleGroups),
     equipment: formState.equipment.trim() || null,
+    tracksAssistance: formState.tracksDuration ? false : formState.tracksAssistance,
     tracksDuration: formState.tracksDuration,
     notes: formState.notes.trim() || null,
   };
@@ -220,12 +226,25 @@ const calculateVolume = (entries: ExerciseSetEntry[]): number => {
   }, 0);
 };
 
-/** Finds the best set by estimated one-rep max. */
-const findBestSetEntry = (entries: ExerciseSetEntry[]): ExerciseSetEntry | undefined => {
-  return [...entries].sort(
-    (firstEntry, secondEntry) =>
-      estimateOneRepMax(secondEntry.set) - estimateOneRepMax(firstEntry.set),
-  )[0];
+/** Finds the best set using the selected exercise's progress semantics. */
+const findBestSetEntry = (
+  entries: ExerciseSetEntry[],
+  exercise: Exercise | undefined,
+): ExerciseSetEntry | undefined => {
+  return [...entries].sort((firstEntry, secondEntry) => {
+    if (exercise?.tracksDuration) {
+      return (secondEntry.set.durationSeconds ?? 0) - (firstEntry.set.durationSeconds ?? 0);
+    }
+
+    if (exercise?.tracksAssistance) {
+      const firstWeight = firstEntry.set.weight ?? Number.POSITIVE_INFINITY;
+      const secondWeight = secondEntry.set.weight ?? Number.POSITIVE_INFINITY;
+
+      return firstWeight - secondWeight;
+    }
+
+    return estimateOneRepMax(secondEntry.set) - estimateOneRepMax(firstEntry.set);
+  })[0];
 };
 
 /** Finds a useful default rest duration from recent logged sets. */
@@ -272,8 +291,9 @@ export const ExerciseLibrary = ({
   const formFeedbackMessage = isFormOpen ? feedbackMessage : null;
   const pageFeedbackMessage = isFormOpen ? null : feedbackMessage;
   const latestSetEntry = selectedSetEntries[0];
-  const bestSetEntry = findBestSetEntry(selectedSetEntries);
-  const estimatedOneRepMax = bestSetEntry ? estimateOneRepMax(bestSetEntry.set) : 0;
+  const bestSetEntry = findBestSetEntry(selectedSetEntries, selectedExercise);
+  const estimatedOneRepMax =
+    bestSetEntry && !selectedExercise?.tracksAssistance ? estimateOneRepMax(bestSetEntry.set) : 0;
   const totalVolume = calculateVolume(selectedSetEntries);
   const defaultRestSeconds = getDefaultRestSeconds(selectedSetEntries);
 
@@ -355,6 +375,15 @@ export const ExerciseLibrary = ({
     setFormState((currentFormState) => ({
       ...currentFormState,
       [field]: value,
+    }));
+  };
+
+  /** Enables or disables timed tracking while keeping progress semantics exclusive. */
+  const updateTracksDuration = (tracksDuration: boolean) => {
+    setFormState((currentFormState) => ({
+      ...currentFormState,
+      tracksAssistance: tracksDuration ? false : currentFormState.tracksAssistance,
+      tracksDuration,
     }));
   };
 
@@ -526,30 +555,54 @@ export const ExerciseLibrary = ({
               <span className={styles.performanceLabel}>{messages.lastMetricLabel}</span>
               <strong className={styles.performanceValue}>
                 {latestSetEntry
-                  ? formatWeight(latestSetEntry.set.weight, latestSetEntry.set.weightUnit)
+                  ? selectedExercise.tracksDuration
+                    ? formatSetEffort(latestSetEntry.set, messages)
+                    : formatWeight(latestSetEntry.set.weight, latestSetEntry.set.weightUnit)
                   : "-"}
               </strong>
               <span className={styles.performanceMeta}>
-                {latestSetEntry ? formatSetEffort(latestSetEntry.set, messages) : messages.noSets}
+                {latestSetEntry
+                  ? selectedExercise.tracksDuration
+                    ? latestSetEntry.set.weight === null
+                      ? messages.tracksDurationLabel
+                      : formatWeight(latestSetEntry.set.weight, latestSetEntry.set.weightUnit)
+                    : formatSetEffort(latestSetEntry.set, messages)
+                  : messages.noSets}
               </span>
             </div>
             <div className={styles.performanceMetric}>
               <span className={styles.performanceLabel}>{messages.volumeMetricLabel}</span>
               <strong className={styles.performanceValue}>
-                {selectedSetEntries.length > 0
+                {!selectedExercise.tracksDuration && selectedSetEntries.length > 0
                   ? formatWeight(totalVolume, latestSetEntry?.set.weightUnit ?? "kg")
                   : "-"}
               </strong>
               <span className={styles.performanceMeta}>{messages.totalMetricLabel}</span>
             </div>
             <div className={styles.performanceMetric}>
-              <span className={styles.performanceLabel}>{messages.oneRepMaxMetricLabel}</span>
+              <span className={styles.performanceLabel}>
+                {selectedExercise.tracksDuration
+                  ? messages.durationMetricLabel
+                  : selectedExercise.tracksAssistance
+                    ? messages.assistanceMetricLabel
+                    : messages.oneRepMaxMetricLabel}
+              </span>
               <strong className={styles.performanceValue}>
-                {estimatedOneRepMax > 0
-                  ? formatWeight(estimatedOneRepMax, bestSetEntry?.set.weightUnit ?? "kg")
-                  : "-"}
+                {selectedExercise.tracksDuration && bestSetEntry
+                  ? formatSetEffort(bestSetEntry.set, messages)
+                  : selectedExercise.tracksAssistance && bestSetEntry
+                    ? formatWeight(bestSetEntry.set.weight, bestSetEntry.set.weightUnit)
+                    : estimatedOneRepMax > 0
+                      ? formatWeight(estimatedOneRepMax, bestSetEntry?.set.weightUnit ?? "kg")
+                      : "-"}
               </strong>
-              <span className={styles.performanceMeta}>{messages.oneRepMaxFormulaLabel}</span>
+              <span className={styles.performanceMeta}>
+                {selectedExercise.tracksDuration
+                  ? messages.durationMetricHint
+                  : selectedExercise.tracksAssistance
+                    ? messages.assistanceMetricHint
+                    : messages.oneRepMaxFormulaLabel}
+              </span>
             </div>
           </div>
         </section>
@@ -586,11 +639,19 @@ export const ExerciseLibrary = ({
             </div>
             <strong className={styles.detailInfoValue}>
               {bestSetEntry
-                ? formatWeight(bestSetEntry.set.weight, bestSetEntry.set.weightUnit)
+                ? selectedExercise.tracksDuration
+                  ? formatSetEffort(bestSetEntry.set, messages)
+                  : formatWeight(bestSetEntry.set.weight, bestSetEntry.set.weightUnit)
                 : "-"}
             </strong>
             <span className={styles.detailInfoMeta}>
-              {bestSetEntry ? formatSetEffort(bestSetEntry.set, messages) : messages.noSets}
+              {bestSetEntry
+                ? selectedExercise.tracksDuration
+                  ? bestSetEntry.set.weight === null
+                    ? messages.tracksDurationLabel
+                    : formatWeight(bestSetEntry.set.weight, bestSetEntry.set.weightUnit)
+                  : formatSetEffort(bestSetEntry.set, messages)
+                : messages.noSets}
             </span>
             <span className={styles.detailInfoDate}>
               {bestSetEntry
@@ -693,13 +754,27 @@ export const ExerciseLibrary = ({
                       className={styles.checkbox}
                       type="checkbox"
                       checked={formState.tracksDuration}
-                      onChange={(event) =>
-                        updateFormField("tracksDuration", event.currentTarget.checked)
-                      }
+                      onChange={(event) => updateTracksDuration(event.currentTarget.checked)}
                     />
                     <span className={styles.checkboxText}>
                       <span className={styles.label}>{messages.tracksDurationLabel}</span>
                       <span className={styles.checkboxHint}>{messages.tracksDurationHint}</span>
+                    </span>
+                  </label>
+
+                  <label className={styles.checkboxField}>
+                    <input
+                      className={styles.checkbox}
+                      type="checkbox"
+                      checked={formState.tracksAssistance}
+                      disabled={formState.tracksDuration}
+                      onChange={(event) =>
+                        updateFormField("tracksAssistance", event.currentTarget.checked)
+                      }
+                    />
+                    <span className={styles.checkboxText}>
+                      <span className={styles.label}>{messages.tracksAssistanceLabel}</span>
+                      <span className={styles.checkboxHint}>{messages.tracksAssistanceHint}</span>
                     </span>
                   </label>
 
@@ -822,13 +897,27 @@ export const ExerciseLibrary = ({
                     className={styles.checkbox}
                     type="checkbox"
                     checked={formState.tracksDuration}
-                    onChange={(event) =>
-                      updateFormField("tracksDuration", event.currentTarget.checked)
-                    }
+                    onChange={(event) => updateTracksDuration(event.currentTarget.checked)}
                   />
                   <span className={styles.checkboxText}>
                     <span className={styles.label}>{messages.tracksDurationLabel}</span>
                     <span className={styles.checkboxHint}>{messages.tracksDurationHint}</span>
+                  </span>
+                </label>
+
+                <label className={styles.checkboxField}>
+                  <input
+                    className={styles.checkbox}
+                    type="checkbox"
+                    checked={formState.tracksAssistance}
+                    disabled={formState.tracksDuration}
+                    onChange={(event) =>
+                      updateFormField("tracksAssistance", event.currentTarget.checked)
+                    }
+                  />
+                  <span className={styles.checkboxText}>
+                    <span className={styles.label}>{messages.tracksAssistanceLabel}</span>
+                    <span className={styles.checkboxHint}>{messages.tracksAssistanceHint}</span>
                   </span>
                 </label>
 

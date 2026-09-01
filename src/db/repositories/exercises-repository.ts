@@ -16,6 +16,9 @@ export type CreateExerciseInput = {
   /** Whether sets are tracked as a timed hold instead of repetitions. */
   tracksDuration?: boolean;
 
+  /** Whether logged weight represents assistance rather than resistance. */
+  tracksAssistance?: boolean;
+
   /** Optional user notes for setup, cues, or substitutions. */
   notes?: string | null;
 };
@@ -33,6 +36,9 @@ export type UpdateExerciseInput = {
 
   /** Whether sets are tracked as a timed hold instead of repetitions. */
   tracksDuration?: boolean;
+
+  /** Whether logged weight represents assistance rather than resistance. */
+  tracksAssistance?: boolean;
 
   /** Optional user notes for setup, cues, or substitutions. */
   notes?: string | null;
@@ -76,9 +82,17 @@ const toNullableText = (value: string | null | undefined): string | null => {
 /** Builds a partial exercise patch while ignoring omitted update fields. */
 const toExercisePatch = (
   input: UpdateExerciseInput,
-): Partial<Pick<Exercise, "equipment" | "muscleGroups" | "name" | "notes" | "tracksDuration">> => {
+): Partial<
+  Pick<
+    Exercise,
+    "equipment" | "muscleGroups" | "name" | "notes" | "tracksAssistance" | "tracksDuration"
+  >
+> => {
   const patch: Partial<
-    Pick<Exercise, "equipment" | "muscleGroups" | "name" | "notes" | "tracksDuration">
+    Pick<
+      Exercise,
+      "equipment" | "muscleGroups" | "name" | "notes" | "tracksAssistance" | "tracksDuration"
+    >
   > = {};
 
   if (input.name !== undefined) {
@@ -95,6 +109,10 @@ const toExercisePatch = (
 
   if (input.tracksDuration !== undefined) {
     patch.tracksDuration = input.tracksDuration;
+  }
+
+  if (input.tracksAssistance !== undefined) {
+    patch.tracksAssistance = input.tracksAssistance;
   }
 
   if (input.notes !== undefined) {
@@ -124,12 +142,14 @@ export const createExerciseRepository = ({
     /** Creates a new exercise. */
     create: async (input) => {
       const timestamp = now();
+      const tracksDuration = input.tracksDuration ?? false;
       const exercise: Exercise = {
         id: createId(),
         name: input.name,
         muscleGroups: input.muscleGroups,
         equipment: toNullableText(input.equipment),
-        tracksDuration: input.tracksDuration ?? false,
+        tracksAssistance: tracksDuration ? false : (input.tracksAssistance ?? false),
+        tracksDuration,
         notes: toNullableText(input.notes),
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -148,9 +168,15 @@ export const createExerciseRepository = ({
         return undefined;
       }
 
+      const patch = toExercisePatch(input);
+      const tracksDuration = patch.tracksDuration ?? existingExercise.tracksDuration ?? false;
       const updatedExercise: Exercise = {
         ...existingExercise,
-        ...toExercisePatch(input),
+        ...patch,
+        tracksAssistance: tracksDuration
+          ? false
+          : (patch.tracksAssistance ?? existingExercise.tracksAssistance ?? false),
+        tracksDuration,
         updatedAt: now(),
       };
 

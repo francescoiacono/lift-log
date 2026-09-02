@@ -21,12 +21,14 @@ import type {
   EntityId,
   Exercise,
   ExerciseRepository,
+  ExerciseTrackingMode,
+  WeightUnit,
   WorkoutSession,
   WorkoutSessionExercise,
   WorkoutSessionRepository,
   WorkoutSet,
 } from "@/db";
-import { exerciseRepository, workoutSessionRepository } from "@/db";
+import { exerciseRepository, formatMuscleGroupLabel, workoutSessionRepository } from "@/db";
 import type { Messages } from "@/i18n";
 
 /** Message dictionary used by the exercise library feature. */
@@ -64,11 +66,8 @@ type ExerciseFormState = {
   /** Equipment input value. */
   equipment: string;
 
-  /** Whether sets are tracked as a timed hold instead of repetitions. */
-  tracksDuration: boolean;
-
-  /** Whether logged weight represents assistance rather than resistance. */
-  tracksAssistance: boolean;
+  /** How sets are entered and compared for progress. */
+  trackingMode: ExerciseTrackingMode;
 
   /** Notes textarea value. */
   notes: string;
@@ -89,14 +88,15 @@ type ExerciseSetEntry = {
   set: WorkoutSet;
 };
 
+const poundsPerKilogram = 2.204_622_621_8;
+
 /** Creates an empty exercise form state. */
 const createEmptyFormState = (): ExerciseFormState => {
   return {
     name: "",
     muscleGroups: "",
     equipment: "",
-    tracksAssistance: false,
-    tracksDuration: false,
+    trackingMode: "weighted",
     notes: "",
   };
 };
@@ -111,7 +111,7 @@ const parseMuscleGroups = (value: string): string[] => {
 
 /** Formats persisted muscle groups for the editable comma-separated field. */
 const formatMuscleGroups = (muscleGroups: string[]): string => {
-  return muscleGroups.join(", ");
+  return muscleGroups.map((muscleGroup) => formatMuscleGroupLabel(muscleGroup)).join(", ");
 };
 
 /** Converts a persisted exercise into editable form state. */
@@ -120,8 +120,7 @@ const toFormState = (exercise: Exercise): ExerciseFormState => {
     name: exercise.name,
     muscleGroups: formatMuscleGroups(exercise.muscleGroups),
     equipment: exercise.equipment ?? "",
-    tracksAssistance: exercise.tracksAssistance ?? false,
-    tracksDuration: exercise.tracksDuration ?? false,
+    trackingMode: exercise.trackingMode,
     notes: exercise.notes ?? "",
   };
 };
@@ -132,8 +131,7 @@ const toCreateInput = (formState: ExerciseFormState) => {
     name: formState.name.trim(),
     muscleGroups: parseMuscleGroups(formState.muscleGroups),
     equipment: formState.equipment.trim() || null,
-    tracksAssistance: formState.tracksDuration ? false : formState.tracksAssistance,
-    tracksDuration: formState.tracksDuration,
+    trackingMode: formState.trackingMode,
     notes: formState.notes.trim() || null,
   };
 };
@@ -185,13 +183,22 @@ const formatShortDate = (timestamp: string): string => {
   }).format(new Date(timestamp));
 };
 
-/** Estimates one-rep max using the Epley formula. */
-const estimateOneRepMax = (set: WorkoutSet): number => {
+/** Converts a logged weight into a consistent comparison or display unit. */
+const convertWeight = (weight: number, fromUnit: WeightUnit, toUnit: WeightUnit): number => {
+  if (fromUnit === toUnit) {
+    return weight;
+  }
+
+  return fromUnit === "kg" ? weight * poundsPerKilogram : weight / poundsPerKilogram;
+};
+
+/** Estimates one-rep max using the Epley formula in the requested unit. */
+const estimateOneRepMax = (set: WorkoutSet, weightUnit: WeightUnit = set.weightUnit): number => {
   if (set.weight === null || set.reps === null || set.weight <= 0 || set.reps <= 0) {
     return 0;
   }
 
-  return set.weight * (1 + set.reps / 30);
+  return convertWeight(set.weight, set.weightUnit, weightUnit) * (1 + set.reps / 30);
 };
 
 /** Returns all sets logged for one exercise, newest first. */
@@ -204,11 +211,13 @@ const getExerciseSetEntries = (
       session.exercises
         .filter((sessionExercise) => sessionExercise.exerciseId === exerciseId)
         .flatMap((sessionExercise) =>
-          sessionExercise.sets.map((set) => ({
-            session,
-            sessionExercise,
-            set,
-          })),
+          sessionExercise.sets
+            .filter((set) => set.isCompleted)
+            .map((set) => ({
+              session,
+              sessionExercise,
+              set,
+            })),
         ),
     )
     .sort((firstEntry, secondEntry) => {
@@ -219,10 +228,15 @@ const getExerciseSetEntries = (
     });
 };
 
-/** Calculates total volume for a list of logged sets. */
-const calculateVolume = (entries: ExerciseSetEntry[]): number => {
+/** Calculates normalized total volume for a list of completed sets. */
+const calculateVolume = (entries: ExerciseSetEntry[], weightUnit: WeightUnit): number => {
   return entries.reduce((volume, entry) => {
-    return volume + (entry.set.weight ?? 0) * (entry.set.reps ?? 0);
+    const weight =
+      entry.set.weight === null
+        ? 0
+        : convertWeight(entry.set.weight, entry.set.weightUnit, weightUnit);
+
+    return volume + weight * (entry.set.reps ?? 0);
   }, 0);
 };
 
@@ -232,18 +246,28 @@ const findBestSetEntry = (
   exercise: Exercise | undefined,
 ): ExerciseSetEntry | undefined => {
   return [...entries].sort((firstEntry, secondEntry) => {
-    if (exercise?.tracksDuration) {
+    if (exercise?.trackingMode === "timed") {
       return (secondEntry.set.durationSeconds ?? 0) - (firstEntry.set.durationSeconds ?? 0);
     }
 
-    if (exercise?.tracksAssistance) {
-      const firstWeight = firstEntry.set.weight ?? Number.POSITIVE_INFINITY;
-      const secondWeight = secondEntry.set.weight ?? Number.POSITIVE_INFINITY;
+    if (exercise?.trackingMode === "assisted") {
+      const firstWeight =
+        firstEntry.set.weight === null
+          ? Number.POSITIVE_INFINITY
+          : convertWeight(firstEntry.set.weight, firstEntry.set.weightUnit, "kg");
+      const secondWeight =
+        secondEntry.set.weight === null
+          ? Number.POSITIVE_INFINITY
+          : convertWeight(secondEntry.set.weight, secondEntry.set.weightUnit, "kg");
 
       return firstWeight - secondWeight;
     }
 
-    return estimateOneRepMax(secondEntry.set) - estimateOneRepMax(firstEntry.set);
+    if (exercise?.trackingMode === "bodyweight") {
+      return (secondEntry.set.reps ?? 0) - (firstEntry.set.reps ?? 0);
+    }
+
+    return estimateOneRepMax(secondEntry.set, "kg") - estimateOneRepMax(firstEntry.set, "kg");
   })[0];
 };
 
@@ -292,9 +316,12 @@ export const ExerciseLibrary = ({
   const pageFeedbackMessage = isFormOpen ? null : feedbackMessage;
   const latestSetEntry = selectedSetEntries[0];
   const bestSetEntry = findBestSetEntry(selectedSetEntries, selectedExercise);
+  const volumeWeightUnit = latestSetEntry?.set.weightUnit ?? "kg";
   const estimatedOneRepMax =
-    bestSetEntry && !selectedExercise?.tracksAssistance ? estimateOneRepMax(bestSetEntry.set) : 0;
-  const totalVolume = calculateVolume(selectedSetEntries);
+    bestSetEntry && selectedExercise?.trackingMode === "weighted"
+      ? estimateOneRepMax(bestSetEntry.set)
+      : 0;
+  const totalVolume = calculateVolume(selectedSetEntries, volumeWeightUnit);
   const defaultRestSeconds = getDefaultRestSeconds(selectedSetEntries);
 
   /** Refreshes the local exercise list from IndexedDB. */
@@ -371,19 +398,13 @@ export const ExerciseLibrary = ({
   };
 
   /** Updates one field in the exercise form state. */
-  const updateFormField = (field: keyof ExerciseFormState, value: string | boolean) => {
+  const updateFormField = <Field extends keyof ExerciseFormState>(
+    field: Field,
+    value: ExerciseFormState[Field],
+  ) => {
     setFormState((currentFormState) => ({
       ...currentFormState,
       [field]: value,
-    }));
-  };
-
-  /** Enables or disables timed tracking while keeping progress semantics exclusive. */
-  const updateTracksDuration = (tracksDuration: boolean) => {
-    setFormState((currentFormState) => ({
-      ...currentFormState,
-      tracksAssistance: tracksDuration ? false : currentFormState.tracksAssistance,
-      tracksDuration,
     }));
   };
 
@@ -523,7 +544,7 @@ export const ExerciseLibrary = ({
                     className={styles.detailPill({ tone: index === 0 ? "accent" : "muted" })}
                     key={muscleGroup}
                   >
-                    {muscleGroup}
+                    {formatMuscleGroupLabel(muscleGroup)}
                   </span>
                 ))
               ) : (
@@ -555,53 +576,62 @@ export const ExerciseLibrary = ({
               <span className={styles.performanceLabel}>{messages.lastMetricLabel}</span>
               <strong className={styles.performanceValue}>
                 {latestSetEntry
-                  ? selectedExercise.tracksDuration
+                  ? selectedExercise.trackingMode === "timed" ||
+                    selectedExercise.trackingMode === "bodyweight"
                     ? formatSetEffort(latestSetEntry.set, messages)
                     : formatWeight(latestSetEntry.set.weight, latestSetEntry.set.weightUnit)
                   : "-"}
               </strong>
               <span className={styles.performanceMeta}>
                 {latestSetEntry
-                  ? selectedExercise.tracksDuration
+                  ? selectedExercise.trackingMode === "timed"
                     ? latestSetEntry.set.weight === null
-                      ? messages.tracksDurationLabel
+                      ? messages.trackingModeTimed
                       : formatWeight(latestSetEntry.set.weight, latestSetEntry.set.weightUnit)
-                    : formatSetEffort(latestSetEntry.set, messages)
+                    : selectedExercise.trackingMode === "bodyweight"
+                      ? messages.bodyweightMetricHint
+                      : formatSetEffort(latestSetEntry.set, messages)
                   : messages.noSets}
               </span>
             </div>
             <div className={styles.performanceMetric}>
               <span className={styles.performanceLabel}>{messages.volumeMetricLabel}</span>
               <strong className={styles.performanceValue}>
-                {!selectedExercise.tracksDuration && selectedSetEntries.length > 0
-                  ? formatWeight(totalVolume, latestSetEntry?.set.weightUnit ?? "kg")
+                {selectedExercise.trackingMode === "weighted" && selectedSetEntries.length > 0
+                  ? formatWeight(totalVolume, volumeWeightUnit)
                   : "-"}
               </strong>
               <span className={styles.performanceMeta}>{messages.totalMetricLabel}</span>
             </div>
             <div className={styles.performanceMetric}>
               <span className={styles.performanceLabel}>
-                {selectedExercise.tracksDuration
+                {selectedExercise.trackingMode === "timed"
                   ? messages.durationMetricLabel
-                  : selectedExercise.tracksAssistance
+                  : selectedExercise.trackingMode === "assisted"
                     ? messages.assistanceMetricLabel
-                    : messages.oneRepMaxMetricLabel}
+                    : selectedExercise.trackingMode === "bodyweight"
+                      ? messages.repetitionsMetricLabel
+                      : messages.oneRepMaxMetricLabel}
               </span>
               <strong className={styles.performanceValue}>
-                {selectedExercise.tracksDuration && bestSetEntry
+                {selectedExercise.trackingMode === "timed" && bestSetEntry
                   ? formatSetEffort(bestSetEntry.set, messages)
-                  : selectedExercise.tracksAssistance && bestSetEntry
+                  : selectedExercise.trackingMode === "assisted" && bestSetEntry
                     ? formatWeight(bestSetEntry.set.weight, bestSetEntry.set.weightUnit)
-                    : estimatedOneRepMax > 0
-                      ? formatWeight(estimatedOneRepMax, bestSetEntry?.set.weightUnit ?? "kg")
-                      : "-"}
+                    : selectedExercise.trackingMode === "bodyweight" && bestSetEntry
+                      ? formatSetEffort(bestSetEntry.set, messages)
+                      : estimatedOneRepMax > 0
+                        ? formatWeight(estimatedOneRepMax, bestSetEntry?.set.weightUnit ?? "kg")
+                        : "-"}
               </strong>
               <span className={styles.performanceMeta}>
-                {selectedExercise.tracksDuration
+                {selectedExercise.trackingMode === "timed"
                   ? messages.durationMetricHint
-                  : selectedExercise.tracksAssistance
+                  : selectedExercise.trackingMode === "assisted"
                     ? messages.assistanceMetricHint
-                    : messages.oneRepMaxFormulaLabel}
+                    : selectedExercise.trackingMode === "bodyweight"
+                      ? messages.bodyweightMetricHint
+                      : messages.oneRepMaxFormulaLabel}
               </span>
             </div>
           </div>
@@ -639,18 +669,21 @@ export const ExerciseLibrary = ({
             </div>
             <strong className={styles.detailInfoValue}>
               {bestSetEntry
-                ? selectedExercise.tracksDuration
+                ? selectedExercise.trackingMode === "timed" ||
+                  selectedExercise.trackingMode === "bodyweight"
                   ? formatSetEffort(bestSetEntry.set, messages)
                   : formatWeight(bestSetEntry.set.weight, bestSetEntry.set.weightUnit)
                 : "-"}
             </strong>
             <span className={styles.detailInfoMeta}>
               {bestSetEntry
-                ? selectedExercise.tracksDuration
+                ? selectedExercise.trackingMode === "timed"
                   ? bestSetEntry.set.weight === null
-                    ? messages.tracksDurationLabel
+                    ? messages.trackingModeTimed
                     : formatWeight(bestSetEntry.set.weight, bestSetEntry.set.weightUnit)
-                  : formatSetEffort(bestSetEntry.set, messages)
+                  : selectedExercise.trackingMode === "bodyweight"
+                    ? messages.bodyweightMetricHint
+                    : formatSetEffort(bestSetEntry.set, messages)
                 : messages.noSets}
             </span>
             <span className={styles.detailInfoDate}>
@@ -749,33 +782,24 @@ export const ExerciseLibrary = ({
                     />
                   </label>
 
-                  <label className={styles.checkboxField}>
-                    <input
-                      className={styles.checkbox}
-                      type="checkbox"
-                      checked={formState.tracksDuration}
-                      onChange={(event) => updateTracksDuration(event.currentTarget.checked)}
-                    />
-                    <span className={styles.checkboxText}>
-                      <span className={styles.label}>{messages.tracksDurationLabel}</span>
-                      <span className={styles.checkboxHint}>{messages.tracksDurationHint}</span>
-                    </span>
-                  </label>
-
-                  <label className={styles.checkboxField}>
-                    <input
-                      className={styles.checkbox}
-                      type="checkbox"
-                      checked={formState.tracksAssistance}
-                      disabled={formState.tracksDuration}
+                  <label className={styles.field}>
+                    <span className={styles.label}>{messages.trackingModeLabel}</span>
+                    <select
+                      className={styles.input}
+                      value={formState.trackingMode}
                       onChange={(event) =>
-                        updateFormField("tracksAssistance", event.currentTarget.checked)
+                        updateFormField(
+                          "trackingMode",
+                          event.currentTarget.value as ExerciseTrackingMode,
+                        )
                       }
-                    />
-                    <span className={styles.checkboxText}>
-                      <span className={styles.label}>{messages.tracksAssistanceLabel}</span>
-                      <span className={styles.checkboxHint}>{messages.tracksAssistanceHint}</span>
-                    </span>
+                    >
+                      <option value="weighted">{messages.trackingModeWeighted}</option>
+                      <option value="assisted">{messages.trackingModeAssisted}</option>
+                      <option value="bodyweight">{messages.trackingModeBodyweight}</option>
+                      <option value="timed">{messages.trackingModeTimed}</option>
+                    </select>
+                    <span className={styles.checkboxHint}>{messages.trackingModeHint}</span>
                   </label>
 
                   <div className={styles.formActions}>
@@ -892,33 +916,24 @@ export const ExerciseLibrary = ({
                   />
                 </label>
 
-                <label className={styles.checkboxField}>
-                  <input
-                    className={styles.checkbox}
-                    type="checkbox"
-                    checked={formState.tracksDuration}
-                    onChange={(event) => updateTracksDuration(event.currentTarget.checked)}
-                  />
-                  <span className={styles.checkboxText}>
-                    <span className={styles.label}>{messages.tracksDurationLabel}</span>
-                    <span className={styles.checkboxHint}>{messages.tracksDurationHint}</span>
-                  </span>
-                </label>
-
-                <label className={styles.checkboxField}>
-                  <input
-                    className={styles.checkbox}
-                    type="checkbox"
-                    checked={formState.tracksAssistance}
-                    disabled={formState.tracksDuration}
+                <label className={styles.field}>
+                  <span className={styles.label}>{messages.trackingModeLabel}</span>
+                  <select
+                    className={styles.input}
+                    value={formState.trackingMode}
                     onChange={(event) =>
-                      updateFormField("tracksAssistance", event.currentTarget.checked)
+                      updateFormField(
+                        "trackingMode",
+                        event.currentTarget.value as ExerciseTrackingMode,
+                      )
                     }
-                  />
-                  <span className={styles.checkboxText}>
-                    <span className={styles.label}>{messages.tracksAssistanceLabel}</span>
-                    <span className={styles.checkboxHint}>{messages.tracksAssistanceHint}</span>
-                  </span>
+                  >
+                    <option value="weighted">{messages.trackingModeWeighted}</option>
+                    <option value="assisted">{messages.trackingModeAssisted}</option>
+                    <option value="bodyweight">{messages.trackingModeBodyweight}</option>
+                    <option value="timed">{messages.trackingModeTimed}</option>
+                  </select>
+                  <span className={styles.checkboxHint}>{messages.trackingModeHint}</span>
                 </label>
 
                 <div className={styles.formActions}>
@@ -976,7 +991,7 @@ export const ExerciseLibrary = ({
                   {exercise.muscleGroups.length > 0 ? (
                     exercise.muscleGroups.map((muscleGroup) => (
                       <span className={styles.muscleGroup} key={muscleGroup}>
-                        {muscleGroup}
+                        {formatMuscleGroupLabel(muscleGroup)}
                       </span>
                     ))
                   ) : (

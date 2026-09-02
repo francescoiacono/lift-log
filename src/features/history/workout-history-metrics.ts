@@ -4,6 +4,10 @@ import type { WorkoutSession } from "@/db";
 export type WorkoutDateGroup = "today" | "thisWeek" | "earlier";
 
 const millisecondsPerDay = 86_400_000;
+const millisecondsPerMinute = 60_000;
+
+/** Longest session duration treated as reliable without completed-set evidence. */
+export const maximumReliableWorkoutDurationMinutes = 240;
 
 /** Returns the local calendar-day start time for a date. */
 const getLocalDateStartMs = (date: Date): number => {
@@ -87,10 +91,48 @@ export const groupSessionsByRecency = (
 /** Sums logged training volume (weight times reps) across every set in a session. */
 export const calculateSessionVolume = (session: WorkoutSession): number => {
   return session.exercises.reduce((sessionVolume, exercise) => {
-    const exerciseVolume = exercise.sets.reduce((setVolume, set) => {
-      return setVolume + (set.weight ?? 0) * (set.reps ?? 0);
-    }, 0);
+    const exerciseVolume = exercise.sets
+      .filter((set) => set.isCompleted)
+      .reduce((setVolume, set) => {
+        return setVolume + (set.weight ?? 0) * (set.reps ?? 0);
+      }, 0);
 
     return sessionVolume + exerciseVolume;
   }, 0);
+};
+
+/**
+ * Estimates active training time from completed-set timestamps and rejects obvious stale outliers.
+ */
+export const calculateSessionDurationMinutes = (session: WorkoutSession): number | null => {
+  const startedAtMs = new Date(session.startedAt).getTime();
+  const finishedAtMs = session.finishedAt ? new Date(session.finishedAt).getTime() : Number.NaN;
+  const completedSetTimes = session.exercises
+    .flatMap((exercise) => exercise.sets)
+    .filter((set) => set.isCompleted && set.completedAt !== null)
+    .map((set) => new Date(set.completedAt ?? "").getTime())
+    .filter((timestamp) => Number.isFinite(timestamp))
+    .sort((first, second) => first - second);
+
+  let durationMs: number;
+
+  if (completedSetTimes.length >= 2) {
+    durationMs = (completedSetTimes.at(-1) ?? 0) - (completedSetTimes[0] ?? 0);
+  } else if (completedSetTimes.length === 1) {
+    durationMs = (completedSetTimes[0] ?? 0) - startedAtMs;
+  } else {
+    durationMs = finishedAtMs - startedAtMs;
+  }
+
+  const durationMinutes = Math.round(durationMs / millisecondsPerMinute);
+
+  if (
+    !Number.isFinite(durationMinutes) ||
+    durationMinutes < 0 ||
+    durationMinutes > maximumReliableWorkoutDurationMinutes
+  ) {
+    return null;
+  }
+
+  return Math.max(1, durationMinutes);
 };

@@ -46,6 +46,7 @@ const exercise = {
   name: "Bench Press",
   muscleGroups: ["chest", "triceps"],
   equipment: "barbell",
+  trackingMode: "weighted",
   notes: null,
   createdAt: timestamp,
   updatedAt: timestamp,
@@ -314,10 +315,42 @@ describe("createLiftLogDatabase", () => {
     await migratedDatabase.open();
 
     await expect(migratedDatabase.exercises.get(exercise.id)).resolves.toMatchObject({
-      tracksAssistance: false,
+      trackingMode: "weighted",
     });
     await expect(migratedDatabase.settings.get(appSettingsId)).resolves.toMatchObject({
       weeklyWorkoutTarget: 3,
+    });
+  });
+
+  it("normalizes muscle groups and legacy tracking flags from schema version 3", async () => {
+    const legacyName = createTestDatabaseName();
+    const legacyDatabase = new Dexie(legacyName);
+
+    databaseNames.add(legacyName);
+    legacyDatabase.version(3).stores({
+      exercises: "id, name, *muscleGroups, equipment, createdAt, updatedAt",
+      workoutTemplates: "id, name, createdAt, updatedAt",
+      workoutSessions: "id, status, templateId, startedAt, finishedAt, updatedAt",
+      settings: "id, updatedAt",
+      activeWorkout: "id, sessionId, updatedAt",
+    });
+
+    await legacyDatabase.open();
+    await legacyDatabase.table("exercises").add({
+      ...exercise,
+      muscleGroups: ["Deltoids", "triceps", "Triceps"],
+      trackingMode: undefined,
+      tracksAssistance: true,
+    });
+    legacyDatabase.close();
+
+    const migratedDatabase = createTestDatabase(legacyName);
+
+    await migratedDatabase.open();
+
+    await expect(migratedDatabase.exercises.get(exercise.id)).resolves.toMatchObject({
+      muscleGroups: ["shoulders", "triceps"],
+      trackingMode: "assisted",
     });
   });
 });

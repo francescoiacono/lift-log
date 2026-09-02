@@ -262,15 +262,16 @@ const getExerciseProgressKind = (
   completedSets: WorkoutSet[],
   weightedKind: WeightedExerciseProgressKind,
 ): ExerciseProgressKind => {
-  if (exercise.tracksDuration) {
+  if (exercise.trackingMode === "timed") {
     return "duration";
   }
 
-  if (exercise.tracksAssistance) {
+  if (exercise.trackingMode === "assisted") {
     return "assistance";
   }
 
-  return completedSets.some((set) => set.weight !== null && set.weight > 0)
+  return exercise.trackingMode === "weighted" &&
+    completedSets.some((set) => set.weight !== null && set.weight > 0)
     ? weightedKind
     : "repetitions";
 };
@@ -291,7 +292,7 @@ const findSessionBest = (
         return {
           set,
           value:
-            set.weight === null || set.weight <= 0
+            set.weight === null || set.weight < 0
               ? Number.POSITIVE_INFINITY
               : convertWeight(set.weight, set.weightUnit, weightUnit),
         };
@@ -310,7 +311,9 @@ const findSessionBest = (
 
       return { set, value: set.reps ?? 0 };
     })
-    .filter(({ value }) => Number.isFinite(value) && value > 0)
+    .filter(
+      ({ value }) => Number.isFinite(value) && (kind === "assistance" ? value >= 0 : value > 0),
+    )
     .sort((first, second) => {
       return kind === "assistance" ? first.value - second.value : second.value - first.value;
     });

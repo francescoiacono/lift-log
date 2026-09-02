@@ -63,20 +63,20 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           <span>{messages.app.sessionsNav}</span>
         </button>
         <button
-          className={styles.navigationButton({ selected: activeView === "exercises" })}
-          type="button"
-          onClick={() => setActiveView("exercises")}
-        >
-          <Dumbbell className={styles.navigationIcon} aria-hidden="true" />
-          <span>{messages.app.exercisesNav}</span>
-        </button>
-        <button
           className={styles.navigationButton({ selected: activeView === "history" })}
           type="button"
           onClick={() => setActiveView("history")}
         >
           <ChartNoAxesCombined className={styles.navigationIcon} aria-hidden="true" />
           <span>{messages.app.historyNav}</span>
+        </button>
+        <button
+          className={styles.navigationButton({ selected: activeView === "exercises" })}
+          type="button"
+          onClick={() => setActiveView("exercises")}
+        >
+          <Dumbbell className={styles.navigationIcon} aria-hidden="true" />
+          <span>{messages.app.exercisesNav}</span>
         </button>
         <button
           className={styles.navigationButton({ selected: activeView === "workouts" })}

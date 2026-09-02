@@ -75,8 +75,7 @@ describe("createExerciseRepository", () => {
       name: "Bench Press",
       muscleGroups: ["chest", "triceps"],
       equipment: "barbell",
-      tracksAssistance: false,
-      tracksDuration: false,
+      trackingMode: "weighted",
       notes: null,
       createdAt: "2026-05-07T10:00:00.000Z",
       updatedAt: "2026-05-07T10:00:00.000Z",
@@ -84,7 +83,7 @@ describe("createExerciseRepository", () => {
     await expect(repository.getById("exercise-1")).resolves.toEqual(exercise);
   });
 
-  it("persists the timed-hold tracking flag", async () => {
+  it("persists a canonical tracking mode", async () => {
     const repository = createExerciseRepository({
       database: createTestDatabase(),
       createId: createIdFactory(["exercise-1"]),
@@ -94,16 +93,28 @@ describe("createExerciseRepository", () => {
     const exercise = await repository.create({
       name: "Plank",
       muscleGroups: ["core"],
-      tracksAssistance: true,
-      tracksDuration: true,
+      trackingMode: "timed",
     });
 
-    expect(exercise.tracksDuration).toBe(true);
-    expect(exercise.tracksAssistance).toBe(false);
+    expect(exercise.trackingMode).toBe("timed");
     await expect(repository.getById("exercise-1")).resolves.toMatchObject({
-      tracksAssistance: false,
-      tracksDuration: true,
+      trackingMode: "timed",
     });
+  });
+
+  it("normalizes muscle-group casing, aliases, and duplicates", async () => {
+    const repository = createExerciseRepository({
+      database: createTestDatabase(),
+      createId: createIdFactory(["exercise-1"]),
+      now: createTimestampFactory(["2026-05-07T10:00:00.000Z"]),
+    });
+
+    const exercise = await repository.create({
+      name: "Overhead press",
+      muscleGroups: ["Deltoids", "Shoulders", "TRICEPS"],
+    });
+
+    expect(exercise.muscleGroups).toEqual(["shoulders", "triceps"]);
   });
 
   it("lists exercises ordered by name", async () => {

@@ -1,16 +1,21 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import {
+  AlertTriangle,
   Check,
   CheckCircle2,
-  CalendarDays,
   ChevronDown,
   ChevronRight,
   CirclePlus,
+  Cloud,
   ClipboardList,
+  Copy,
   Dumbbell,
+  Flame,
   History,
+  HeartPulse,
   ListChecks,
   MoreVertical,
+  Sparkles,
   Star,
   Timer,
   TrendingUp,
@@ -19,7 +24,15 @@ import {
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-import { findLastSessionSets, type LastSessionSets } from "./active-workout-dashboard-metrics";
+import {
+  buildMuscleRecoveryStatuses,
+  calculateTrainingDayStreak,
+  findLastSessionSets,
+  getStaleWorkoutAgeHours,
+  recommendWorkoutTemplate,
+  type LastSessionSets,
+  type MuscleRecoveryStatus,
+} from "./active-workout-dashboard-metrics";
 import { styles } from "./active-workout-screen.styles";
 import type {
   ActiveRestTimer,
@@ -39,6 +52,7 @@ import type {
 import {
   defaultWeeklyWorkoutTarget,
   exerciseRepository,
+  formatMuscleGroupLabel,
   settingsRepository,
   workoutSessionRepository,
   workoutTemplateRepository,
@@ -46,7 +60,9 @@ import {
 import {
   buildExerciseProgress,
   buildWeeklyTrainingSummaries,
-  getDaysSinceLastWorkout,
+  convertWeight,
+  type ExerciseProgressKind,
+  type ExerciseProgressPoint,
 } from "@/features/history";
 import type { Messages } from "@/i18n";
 
@@ -114,6 +130,18 @@ type EditingSetTarget = {
 
   /** Set identifier currently open in the settings dialog. */
   setId: EntityId;
+};
+
+/** Recent personal-best item shown on the focused Today dashboard. */
+type RecentProgressHighlight = {
+  /** Exercise that produced the improvement. */
+  exercise: Exercise;
+
+  /** Progress metric used to compare the exercise. */
+  kind: ExerciseProgressKind;
+
+  /** Most recent record-setting performance. */
+  point: ExerciseProgressPoint;
 };
 
 /** Creates an empty draft for logging a completed set. */
@@ -235,17 +263,12 @@ const formatExerciseMeta = (
 ): string => {
   const restTarget = formatRestTarget(sessionExercise.restSeconds, messages);
   const setProgress = formatSetProgress(
-    sessionExercise.sets.length,
+    sessionExercise.sets.filter((set) => set.isCompleted).length,
     sessionExercise.targetSets,
     messages,
   );
 
   return restTarget ? `${setProgress} · ${restTarget}` : setProgress;
-};
-
-/** Counts all sets logged in a workout session. */
-const countWorkoutSets = (session: WorkoutSession): number => {
-  return session.exercises.reduce((totalSets, exercise) => totalSets + exercise.sets.length, 0);
 };
 
 /** Formats a compact numeric stat for dashboard cards. */
@@ -255,21 +278,136 @@ const formatDashboardNumber = (value: number): string => {
   }).format(value);
 };
 
-/** Formats the last-workout recency shown on the dashboard. */
-const formatLastWorkoutRecency = (days: number | null, messages: ActiveWorkoutMessages): string => {
-  if (days === null) {
-    return messages.lastWorkoutNone;
+/** Formats the reason attached to the recommended workout on Today. */
+const formatRecommendationReason = (
+  daysSinceLastSession: number | null,
+  messages: ActiveWorkoutMessages,
+): string => {
+  if (daysSinceLastSession === null) {
+    return messages.recommendationNeverCompleted;
   }
 
-  if (days === 0) {
-    return messages.lastWorkoutToday;
+  if (daysSinceLastSession === 0) {
+    return messages.recommendationCompletedToday;
   }
 
-  if (days === 1) {
-    return messages.lastWorkoutYesterday;
+  if (daysSinceLastSession === 1) {
+    return messages.recommendationCompletedYesterday;
   }
 
-  return messages.lastWorkoutDays.replace("{days}", String(days));
+  return messages.recommendationCompletedDays.replace("{days}", String(daysSinceLastSession));
+};
+
+/** Formats one recent progress highlight using its metric semantics. */
+const formatProgressHighlight = (
+  highlight: RecentProgressHighlight,
+  weightUnit: AppSettings["weightUnit"],
+  messages: ActiveWorkoutMessages,
+): string => {
+  const value = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(
+    highlight.point.value,
+  );
+
+  if (highlight.kind === "duration") {
+    return messages.progressTimed
+      .replace("{name}", highlight.exercise.name)
+      .replace("{value}", value);
+  }
+
+  if (highlight.kind === "assistance") {
+    return messages.progressAssisted
+      .replace("{name}", highlight.exercise.name)
+      .replace("{value}", value)
+      .replace("{unit}", weightUnit);
+  }
+
+  if (highlight.kind === "repetitions") {
+    return messages.progressRepetitions
+      .replace("{name}", highlight.exercise.name)
+      .replace("{value}", value);
+  }
+
+  return messages.progressWeighted
+    .replace("{name}", highlight.exercise.name)
+    .replace("{value}", value)
+    .replace("{unit}", weightUnit);
+};
+
+/** Formats a compact previous-best value for the active workout. */
+const formatPreviousBestValue = (
+  highlight: RecentProgressHighlight,
+  weightUnit: AppSettings["weightUnit"],
+  messages: ActiveWorkoutMessages,
+): string => {
+  const value = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(
+    highlight.point.value,
+  );
+
+  if (highlight.kind === "duration") {
+    return messages.previousBestDuration.replace("{value}", value);
+  }
+
+  if (highlight.kind === "repetitions") {
+    return messages.previousBestRepetitions.replace("{value}", value);
+  }
+
+  return messages.previousBestWeight.replace("{value}", value).replace("{unit}", weightUnit);
+};
+
+/** Formats the compact recency line for one muscle-recovery item. */
+const formatRecoveryRecency = (
+  status: MuscleRecoveryStatus,
+  messages: ActiveWorkoutMessages,
+): string => {
+  if (status.daysSinceTrained === null) {
+    return messages.recoveryNeverTrained;
+  }
+
+  if (status.daysSinceTrained === 0) {
+    return messages.recoveryTrainedToday;
+  }
+
+  if (status.daysSinceTrained === 1) {
+    return messages.recoveryTrainedYesterday;
+  }
+
+  return messages.recoveryTrainedDays.replace("{days}", String(status.daysSinceTrained));
+};
+
+/** Returns localized copy for a muscle-recovery state. */
+const getRecoveryStateLabel = (
+  status: MuscleRecoveryStatus,
+  messages: ActiveWorkoutMessages,
+): string => {
+  if (status.state === "ready") {
+    return messages.recoveryReady;
+  }
+
+  if (status.state === "recent") {
+    return messages.recoveryRecent;
+  }
+
+  return messages.recoveryRest;
+};
+
+/** Returns completed and planned set totals for active-session progress. */
+const getWorkoutSetProgress = (
+  session: WorkoutSession,
+): { completedSets: number; plannedSets: number } => {
+  const plannedSets = session.exercises.reduce(
+    (total, exercise) => total + (exercise.targetSets ?? 0),
+    0,
+  );
+  const exercisesInProgress =
+    plannedSets > 0
+      ? session.exercises.filter((exercise) => exercise.targetSets !== null)
+      : session.exercises;
+  const completedSets = exercisesInProgress.reduce(
+    (total, exercise) => total + exercise.sets.filter((set) => set.isCompleted).length,
+    0,
+  );
+
+  return { completedSets, plannedSets };
 };
 
 /** Calculates percent completion for the active workout card. */
@@ -278,16 +416,13 @@ const calculateWorkoutCompletionPercent = (session: WorkoutSession | undefined):
     return 0;
   }
 
-  const completedSets = countWorkoutSets(session);
-  const targetSets = session.exercises.reduce((totalSets, exercise) => {
-    return totalSets + (exercise.targetSets ?? exercise.sets.length);
-  }, 0);
+  const { completedSets, plannedSets } = getWorkoutSetProgress(session);
 
-  if (targetSets === 0) {
+  if (plannedSets === 0) {
     return completedSets > 0 ? 100 : 0;
   }
 
-  return Math.min(100, Math.round((completedSets / targetSets) * 100));
+  return Math.min(100, Math.round((completedSets / plannedSets) * 100));
 };
 
 /** Formats a set's primary effort as either a hold duration or a rep count. */
@@ -470,7 +605,6 @@ export const ActiveWorkoutScreen = ({
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
   const [finishedSessions, setFinishedSessions] = useState<WorkoutSession[]>([]);
   const [settings, setSettings] = useState<AppSettings | undefined>();
-  const [recentPersonalRecords, setRecentPersonalRecords] = useState<string[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(initialFeedbackMessage);
   const [isStartingWorkout, setIsStartingWorkout] = useState(false);
@@ -491,7 +625,6 @@ export const ActiveWorkoutScreen = ({
   const [isSavingSetEdit, setIsSavingSetEdit] = useState(false);
   const [isDeletingSet, setIsDeletingSet] = useState(false);
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
-  const [isRestTimerMinimized, setIsRestTimerMinimized] = useState(false);
 
   const exerciseById = useMemo(() => {
     return new Map(exercises.map((exercise) => [exercise.id, exercise]));
@@ -531,17 +664,78 @@ export const ActiveWorkoutScreen = ({
       weightUnit: settings?.weightUnit ?? "kg",
     })[0];
   }, [finishedSessions, settings?.weightUnit]);
-  const daysSinceLastWorkout = useMemo(
-    () => getDaysSinceLastWorkout(finishedSessions),
+  const weeklyWorkoutTarget = settings?.weeklyWorkoutTarget ?? defaultWeeklyWorkoutTarget;
+  const workoutRecommendation = useMemo(
+    () => recommendWorkoutTemplate(templates, finishedSessions),
+    [finishedSessions, templates],
+  );
+  const primaryTemplate = workoutRecommendation?.template;
+  const dashboardWorkoutName = primaryTemplate?.name ?? messages.dashboardWorkoutFallback;
+  const dashboardExerciseCount = primaryTemplate?.exercises.length ?? 0;
+  const dashboardCompletionPercent = calculateWorkoutCompletionPercent(activeSession);
+  const trainingDayStreak = useMemo(
+    () => calculateTrainingDayStreak(finishedSessions),
     [finishedSessions],
   );
-  const weeklyWorkoutTarget = settings?.weeklyWorkoutTarget ?? defaultWeeklyWorkoutTarget;
-  const primaryTemplate = templates[0];
-  const dashboardWorkoutName =
-    activeSession?.name ?? primaryTemplate?.name ?? messages.dashboardWorkoutFallback;
-  const dashboardExerciseCount =
-    activeSession?.exercises.length ?? primaryTemplate?.exercises.length ?? 0;
-  const dashboardCompletionPercent = calculateWorkoutCompletionPercent(activeSession);
+  const recoveryStatuses = useMemo(
+    () => buildMuscleRecoveryStatuses(exercises, finishedSessions).slice(0, 8),
+    [exercises, finishedSessions],
+  );
+  const recentProgressHighlights = useMemo(() => {
+    return exercises
+      .flatMap((exercise): RecentProgressHighlight[] => {
+        const progress = buildExerciseProgress(
+          exercise,
+          finishedSessions,
+          settings?.weightUnit ?? "kg",
+        );
+        const latestPoint = progress.points.at(-1);
+
+        return latestPoint?.isPersonalRecord
+          ? [{ exercise, kind: progress.kind, point: latestPoint }]
+          : [];
+      })
+      .sort(
+        (firstHighlight, secondHighlight) =>
+          new Date(secondHighlight.point.startedAt).getTime() -
+          new Date(firstHighlight.point.startedAt).getTime(),
+      )
+      .slice(0, 2);
+  }, [exercises, finishedSessions, settings?.weightUnit]);
+  const previousBestByExerciseId = useMemo(() => {
+    const previousBest = new Map<EntityId, RecentProgressHighlight>();
+
+    for (const exercise of exercises) {
+      const progress = buildExerciseProgress(
+        exercise,
+        finishedSessions,
+        settings?.weightUnit ?? "kg",
+      );
+      const bestPoint = [...progress.points].sort((firstPoint, secondPoint) =>
+        progress.kind === "assistance"
+          ? firstPoint.value - secondPoint.value
+          : secondPoint.value - firstPoint.value,
+      )[0];
+
+      if (bestPoint) {
+        previousBest.set(exercise.id, { exercise, kind: progress.kind, point: bestPoint });
+      }
+    }
+
+    return previousBest;
+  }, [exercises, finishedSessions, settings?.weightUnit]);
+  const activeSetProgress = activeSession
+    ? getWorkoutSetProgress(activeSession)
+    : { completedSets: 0, plannedSets: 0 };
+  const staleWorkoutAgeHours = getStaleWorkoutAgeHours(activeSession);
+  const isPersistingWorkout =
+    isFinishing ||
+    isSavingPlan ||
+    isClearingTimer ||
+    isSavingSetEdit ||
+    isDeletingSet ||
+    addingExerciseId !== null ||
+    savingSetExerciseId !== null;
   const remainingRestSeconds = activeRestTimer
     ? getRemainingRestSeconds(activeRestTimer, timerNowMs)
     : 0;
@@ -565,7 +759,7 @@ export const ActiveWorkoutScreen = ({
 
     return {
       exerciseName: exercise?.name ?? messages.missingExercise,
-      tracksDuration: exercise?.tracksDuration ?? false,
+      trackingMode: exercise?.trackingMode ?? "weighted",
       sessionExercise,
       set,
     };
@@ -613,7 +807,6 @@ export const ActiveWorkoutScreen = ({
     setSavePlanName("");
     setSetEditDraft(createEmptySetDraft());
     setFeedbackMessage(null);
-    setRecentPersonalRecords([]);
   }, [isActive]);
 
   useEffect(() => {
@@ -636,12 +829,6 @@ export const ActiveWorkoutScreen = ({
     setOpenExerciseIds(sessionExercises[0] ? [sessionExercises[0].exerciseId] : []);
     setInitializedSessionId(activeSession.id);
   }, [activeSession, initializedSessionId, sessionExercises]);
-
-  // Re-expand the timer whenever a new rest period begins (endsAt is stable across
-  // snapshot refreshes, so a plain refresh keeps the timer minimized).
-  useEffect(() => {
-    setIsRestTimerMinimized(false);
-  }, [activeRestTimer?.endsAt]);
 
   useEffect(() => {
     if (!activeRestTimer) {
@@ -676,22 +863,6 @@ export const ActiveWorkoutScreen = ({
           finishedWorkout,
           ...currentSessions.filter((session) => session.id !== finishedWorkout.id),
         ]),
-      );
-      setRecentPersonalRecords(
-        finishedWorkout.exercises.flatMap((sessionExercise) => {
-          const exercise = exerciseById.get(sessionExercise.exerciseId);
-
-          if (!exercise) {
-            return [];
-          }
-
-          const progress = buildExerciseProgress(exercise, [...finishedSessions, finishedWorkout]);
-          const finishedPoint = progress.points.find(
-            (point) => point.sessionId === finishedWorkout.id,
-          );
-
-          return finishedPoint?.isPersonalRecord ? [exercise.name] : [];
-        }),
       );
       setFeedbackMessage(messages.finishSuccess);
     } catch {
@@ -897,6 +1068,27 @@ export const ActiveWorkoutScreen = ({
     }));
   };
 
+  /** Copies a matching set from the previous workout into the current entry fields. */
+  const copyPreviousSet = (exerciseId: EntityId, previousSet: WorkoutSet) => {
+    const weightUnit = settings?.weightUnit ?? "kg";
+    const tracksWeight = exerciseById.get(exerciseId)?.trackingMode !== "bodyweight";
+    const normalizedWeight =
+      !tracksWeight || previousSet.weight === null
+        ? null
+        : convertWeight(previousSet.weight, previousSet.weightUnit, weightUnit);
+
+    setSetDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [exerciseId]: {
+        reps: formatOptionalInteger(previousSet.reps),
+        durationSeconds: formatOptionalInteger(previousSet.durationSeconds ?? null),
+        weight: formatOptionalNumber(normalizedWeight),
+        restSeconds: formatOptionalInteger(previousSet.restSeconds),
+      },
+    }));
+    setFeedbackMessage(messages.previousSetCopied);
+  };
+
   /** Toggles one exercise card between open and closed states. */
   const toggleExercise = (exerciseId: EntityId) => {
     setOpenExerciseIds((currentOpenExerciseIds) =>
@@ -961,9 +1153,10 @@ export const ActiveWorkoutScreen = ({
     }
 
     const draft = getSetDraft(setDrafts, sessionExercise.exerciseId);
-    const tracksDuration = exerciseById.get(sessionExercise.exerciseId)?.tracksDuration ?? false;
+    const trackingMode = exerciseById.get(sessionExercise.exerciseId)?.trackingMode ?? "weighted";
+    const tracksDuration = trackingMode === "timed";
     const effort = readSetEffort(tracksDuration, draft, messages);
-    const weight = toOptionalNonNegativeNumber(draft.weight);
+    const weight = trackingMode === "bodyweight" ? null : toOptionalNonNegativeNumber(draft.weight);
     const parsedRestSeconds = toOptionalNonNegativeInteger(draft.restSeconds);
 
     if ("error" in effort) {
@@ -987,7 +1180,7 @@ export const ActiveWorkoutScreen = ({
         durationSeconds: effort.durationSeconds,
         restSeconds,
         weight,
-        weightUnit: "kg",
+        weightUnit: settings?.weightUnit ?? "kg",
       });
 
       if (!workoutSession) {
@@ -1051,8 +1244,15 @@ export const ActiveWorkoutScreen = ({
       return;
     }
 
-    const effort = readSetEffort(editingSetContext.tracksDuration, setEditDraft, messages);
-    const weight = toOptionalNonNegativeNumber(setEditDraft.weight);
+    const effort = readSetEffort(
+      editingSetContext.trackingMode === "timed",
+      setEditDraft,
+      messages,
+    );
+    const weight =
+      editingSetContext.trackingMode === "bodyweight"
+        ? null
+        : toOptionalNonNegativeNumber(setEditDraft.weight);
     const restSeconds = toOptionalNonNegativeInteger(setEditDraft.restSeconds);
 
     if ("error" in effort) {
@@ -1128,77 +1328,61 @@ export const ActiveWorkoutScreen = ({
   };
 
   return (
-    <section className={styles.root} aria-labelledby="active-workout-title">
-      <header className={styles.dashboardHeader}>
-        <div className={styles.dashboardGreeting}>
-          <h1 className={styles.dashboardTitle} id="active-workout-title">
-            {messages.greetingTitle}
-          </h1>
-          <p className={styles.dashboardSubtitle}>{messages.greetingSubtitle}</p>
-        </div>
-      </header>
+    <section
+      className={styles.root}
+      aria-label={activeSession ? messages.title : undefined}
+      aria-labelledby={activeSession ? undefined : "active-workout-title"}
+    >
+      {!activeSession ? (
+        <header className={styles.dashboardHeader}>
+          <div className={styles.dashboardGreeting}>
+            <h1 className={styles.dashboardTitle} id="active-workout-title">
+              {messages.greetingTitle}
+            </h1>
+            <p className={styles.dashboardSubtitle}>{messages.greetingSubtitle}</p>
+          </div>
+        </header>
+      ) : null}
 
       {feedbackMessage ? <p className={styles.feedback}>{feedbackMessage}</p> : null}
 
-      {recentPersonalRecords.length > 0 && !activeSession ? (
-        <article className={styles.personalRecordCard}>
-          <Star className={styles.personalRecordIcon} aria-hidden="true" />
-          <div className={styles.personalRecordText}>
-            <strong className={styles.personalRecordTitle}>{messages.workoutPrTitle}</strong>
-            <span className={styles.personalRecordDescription}>
-              {messages.workoutPrDescription}
-            </span>
-            <span className={styles.personalRecordList}>
-              {recentPersonalRecords.map((exerciseName, index) => (
-                <span className={styles.personalRecordBadge} key={`${exerciseName}-${index}`}>
-                  {exerciseName}
-                </span>
-              ))}
-            </span>
-          </div>
-        </article>
-      ) : null}
-
-      {loadState === "ready" ? (
+      {loadState === "ready" && !activeSession ? (
         <div className={styles.dashboard}>
           <section className={styles.dashboardSection} aria-labelledby="today-workout-title">
             <h2 className={styles.sectionTitle} id="today-workout-title">
               {messages.todayWorkoutTitle}
             </h2>
-            <button
-              className={styles.todayWorkoutCard}
-              type="button"
-              disabled={
-                isStartingWorkout || (!activeSession && !primaryTemplate && !canStartEmptyWorkout)
-              }
-              onClick={() => void startDashboardWorkout()}
-            >
+            <article className={styles.todayWorkoutCard}>
               <span className={styles.todayWorkoutIcon}>
                 <Dumbbell className={styles.todayWorkoutIconSvg} aria-hidden="true" />
               </span>
               <span className={styles.todayWorkoutText}>
                 <span className={styles.todayWorkoutName}>{dashboardWorkoutName}</span>
                 <span className={styles.todayWorkoutMeta}>
-                  {messages.dashboardWorkoutMeta.replace(
-                    "{exercises}",
-                    formatExerciseCount(dashboardExerciseCount, messages),
-                  )}
+                  {workoutRecommendation
+                    ? formatRecommendationReason(
+                        workoutRecommendation.daysSinceLastSession,
+                        messages,
+                      )
+                    : messages.recommendationBuildFirstPlan}
+                </span>
+                <span className={styles.todayWorkoutMeta}>
+                  {formatExerciseCount(dashboardExerciseCount, messages)}
                 </span>
               </span>
-              <ChevronRight className={styles.todayWorkoutChevron} aria-hidden="true" />
-              <span className={styles.progressTrack} aria-hidden="true">
-                <span
-                  className={styles.progressFill}
-                  style={{ inlineSize: `${dashboardCompletionPercent}%` }}
-                />
-              </span>
-              <span className={styles.progressLabel}>
-                {messages.dashboardCompletionLabel.replace(
-                  "{percent}",
-                  String(dashboardCompletionPercent),
-                )}
-              </span>
-            </button>
+              <Sparkles className={styles.todayWorkoutChevron} aria-hidden="true" />
+              <button
+                className={styles.primaryStartButton}
+                type="button"
+                disabled={isStartingWorkout || (!primaryTemplate && !canStartEmptyWorkout)}
+                onClick={() => void startDashboardWorkout()}
+              >
+                <span>
+                  {isStartingWorkout ? messages.startingAction : messages.startWorkoutAction}
+                </span>
+                <ChevronRight className={styles.icon} aria-hidden="true" />
+              </button>
+            </article>
           </section>
 
           <section className={styles.dashboardSection} aria-labelledby="weekly-stats-title">
@@ -1229,32 +1413,67 @@ export const ActiveWorkoutScreen = ({
                 <span className={styles.statLabel}>{messages.setsStatLabel}</span>
               </article>
               <article className={styles.statCard}>
-                <Dumbbell className={styles.statIcon({ tone: "orange" })} aria-hidden="true" />
+                <Flame className={styles.statIcon({ tone: "orange" })} aria-hidden="true" />
                 <strong className={styles.statValue}>
-                  {formatDashboardNumber(currentWeekSummary?.volume ?? 0)}
+                  {formatDashboardNumber(trainingDayStreak)}
                 </strong>
-                <span className={styles.statLabel}>
-                  {messages.volumeStatLabel.replace("{unit}", settings?.weightUnit ?? "kg")}
-                </span>
+                <span className={styles.statLabel}>{messages.streakStatLabel}</span>
               </article>
             </div>
           </section>
 
-          <button
-            className={styles.streakCard}
-            type="button"
-            onClick={onOpenHistory}
-            disabled={!onOpenHistory}
-          >
-            <CalendarDays className={styles.streakIcon} aria-hidden="true" />
-            <span className={styles.streakText}>
-              <span className={styles.streakTitle}>{messages.lastWorkoutCardTitle}</span>
-              <span className={styles.streakDescription}>
-                {formatLastWorkoutRecency(daysSinceLastWorkout, messages)}
-              </span>
-            </span>
-            <ChevronRight className={styles.todayWorkoutChevron} aria-hidden="true" />
-          </button>
+          <section className={styles.dashboardSection} aria-labelledby="recent-progress-title">
+            <div className={styles.sectionHeader}>
+              <h2 className={styles.sectionTitle} id="recent-progress-title">
+                {messages.recentProgressTitle}
+              </h2>
+              {onOpenHistory ? (
+                <button className={styles.textButton} type="button" onClick={onOpenHistory}>
+                  {messages.insightsAction}
+                </button>
+              ) : null}
+            </div>
+            {recentProgressHighlights.length > 0 ? (
+              <div className={styles.progressHighlightList}>
+                {recentProgressHighlights.map((highlight) => (
+                  <article className={styles.progressHighlight} key={highlight.exercise.id}>
+                    <TrendingUp className={styles.progressHighlightIcon} aria-hidden="true" />
+                    <span>
+                      {formatProgressHighlight(highlight, settings?.weightUnit ?? "kg", messages)}
+                    </span>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className={styles.dashboardEmpty}>{messages.noRecentProgress}</p>
+            )}
+          </section>
+
+          <section className={styles.dashboardSection} aria-labelledby="recovery-overview-title">
+            <div className={styles.sectionHeader}>
+              <h2 className={styles.sectionTitle} id="recovery-overview-title">
+                {messages.recoveryOverviewTitle}
+              </h2>
+              <HeartPulse className={styles.recoveryIcon} aria-hidden="true" />
+            </div>
+            {recoveryStatuses.length > 0 ? (
+              <ul className={styles.recoveryList}>
+                {recoveryStatuses.map((status) => (
+                  <li className={styles.recoveryItem} key={status.muscleGroupId}>
+                    <span className={styles.recoveryText}>
+                      <strong>{formatMuscleGroupLabel(status.muscleGroupId)}</strong>
+                      <span>{formatRecoveryRecency(status, messages)}</span>
+                    </span>
+                    <span className={styles.recoveryBadge({ state: status.state })}>
+                      {getRecoveryStateLabel(status, messages)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className={styles.dashboardEmpty}>{messages.noRecoveryData}</p>
+            )}
+          </section>
         </div>
       ) : null}
 
@@ -1272,6 +1491,15 @@ export const ActiveWorkoutScreen = ({
           className={styles.sessionPanel}
           aria-label={formatSessionTitle(activeSession.name, messages)}
         >
+          {staleWorkoutAgeHours !== null ? (
+            <aside className={styles.staleWorkoutWarning}>
+              <AlertTriangle className={styles.staleWorkoutIcon} aria-hidden="true" />
+              <span>
+                <strong>{messages.staleWorkoutTitle}</strong>
+                {messages.staleWorkoutDescription.replace("{hours}", String(staleWorkoutAgeHours))}
+              </span>
+            </aside>
+          ) : null}
           <div className={styles.sessionHeader}>
             <div className={styles.sessionHeading}>
               <p className={styles.sessionStatus}>{messages.inProgressLabel}</p>
@@ -1281,6 +1509,10 @@ export const ActiveWorkoutScreen = ({
               <p className={styles.sessionMeta}>
                 {formatStartedAt(activeSession.startedAt, messages)} ·{" "}
                 {formatExerciseCount(sessionExercises.length, messages)}
+              </p>
+              <p className={styles.saveStatus} aria-live="polite">
+                <Cloud className={styles.saveStatusIcon} aria-hidden="true" />
+                {isPersistingWorkout ? messages.savingOffline : messages.savedOffline}
               </p>
             </div>
             <div className={styles.sessionActions}>
@@ -1318,6 +1550,30 @@ export const ActiveWorkoutScreen = ({
             </div>
           </div>
 
+          <div className={styles.sessionProgress}>
+            <span className={styles.sessionProgressText}>
+              <strong>{messages.sessionProgressTitle}</strong>
+              <span>
+                {activeSetProgress.plannedSets > 0
+                  ? messages.sessionPlannedProgress
+                      .replace("{completed}", String(activeSetProgress.completedSets))
+                      .replace("{planned}", String(activeSetProgress.plannedSets))
+                  : messages.sessionCompletedProgress.replace(
+                      "{completed}",
+                      String(activeSetProgress.completedSets),
+                    )}
+              </span>
+            </span>
+            {activeSetProgress.plannedSets > 0 ? (
+              <span className={styles.progressTrack} aria-hidden="true">
+                <span
+                  className={styles.progressFill}
+                  style={{ inlineSize: `${dashboardCompletionPercent}%` }}
+                />
+              </span>
+            ) : null}
+          </div>
+
           {sessionExercises.length === 0 ? (
             <div className={styles.emptyState}>
               <Dumbbell className={styles.emptyIcon} aria-hidden="true" />
@@ -1338,12 +1594,17 @@ export const ActiveWorkoutScreen = ({
               {sessionExercises.map((sessionExercise) => {
                 const exercise = exerciseById.get(sessionExercise.exerciseId);
                 const exerciseName = exercise?.name ?? messages.missingExercise;
-                const tracksDuration = exercise?.tracksDuration ?? false;
+                const tracksDuration = exercise?.trackingMode === "timed";
+                const tracksWeight = exercise?.trackingMode !== "bodyweight";
                 const setDraft = getSetDraft(setDrafts, sessionExercise.exerciseId);
                 const sets = sortWorkoutSets(sessionExercise.sets);
+                const completedSetCount = sets.filter((set) => set.isCompleted).length;
                 const isSavingSet = savingSetExerciseId === sessionExercise.exerciseId;
                 const isExerciseOpen = openExerciseIds.includes(sessionExercise.exerciseId);
                 const lastSession = lastSessionByExerciseId.get(sessionExercise.exerciseId);
+                const previousSetToCopy =
+                  lastSession?.sets[Math.min(completedSetCount, lastSession.sets.length - 1)];
+                const previousBest = previousBestByExerciseId.get(sessionExercise.exerciseId);
 
                 return (
                   <li className={styles.exerciseCard} key={sessionExercise.exerciseId}>
@@ -1374,7 +1635,7 @@ export const ActiveWorkoutScreen = ({
                     {isExerciseOpen ? (
                       <div className={styles.exerciseDetails}>
                         {lastSession ? (
-                          <p className={styles.lastSession}>
+                          <div className={styles.lastSession}>
                             <History className={styles.lastSessionIcon} aria-hidden="true" />
                             <span className={styles.lastSessionText}>
                               {messages.lastSessionLabel}:{" "}
@@ -1382,6 +1643,31 @@ export const ActiveWorkoutScreen = ({
                                 .map((set) => formatLastSessionSet(set, messages))
                                 .join(" · ")}
                             </span>
+                            {previousSetToCopy ? (
+                              <button
+                                className={styles.copyPreviousButton}
+                                type="button"
+                                onClick={() =>
+                                  copyPreviousSet(sessionExercise.exerciseId, previousSetToCopy)
+                                }
+                              >
+                                <Copy className={styles.setActionIcon} aria-hidden="true" />
+                                <span>{messages.copyPreviousSetAction}</span>
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {previousBest ? (
+                          <p className={styles.previousBest}>
+                            <Star className={styles.previousBestIcon} aria-hidden="true" />
+                            <span>{messages.previousBestLabel}</span>
+                            <strong>
+                              {formatPreviousBestValue(
+                                previousBest,
+                                settings?.weightUnit ?? "kg",
+                                messages,
+                              )}
+                            </strong>
                           </p>
                         ) : null}
                         {sets.length > 0 ? (
@@ -1440,23 +1726,29 @@ export const ActiveWorkoutScreen = ({
                                 }
                               />
                             </label>
-                            <label className={styles.setField}>
-                              <span className={styles.setLabel}>{messages.weightLabel}</span>
-                              <input
-                                className={styles.setInput}
-                                type="text"
-                                inputMode="decimal"
-                                value={setDraft.weight}
-                                placeholder={messages.weightPlaceholder}
-                                onChange={(event) =>
-                                  updateSetDraft(
-                                    sessionExercise.exerciseId,
-                                    "weight",
-                                    event.currentTarget.value,
-                                  )
-                                }
-                              />
-                            </label>
+                            {tracksWeight ? (
+                              <label className={styles.setField}>
+                                <span className={styles.setLabel}>
+                                  {exercise?.trackingMode === "assisted"
+                                    ? messages.assistanceLabel
+                                    : messages.weightLabel}
+                                </span>
+                                <input
+                                  className={styles.setInput}
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={setDraft.weight}
+                                  placeholder={messages.weightPlaceholder}
+                                  onChange={(event) =>
+                                    updateSetDraft(
+                                      sessionExercise.exerciseId,
+                                      "weight",
+                                      event.currentTarget.value,
+                                    )
+                                  }
+                                />
+                              </label>
+                            ) : null}
                             <label className={styles.setField}>
                               <span className={styles.setLabel}>{messages.restSecondsLabel}</span>
                               <input
@@ -1499,80 +1791,9 @@ export const ActiveWorkoutScreen = ({
         </article>
       ) : null}
 
-      <Dialog.Root
-        open={
-          isActive &&
-          activeRestTimer !== undefined &&
-          activeRestTimer !== null &&
-          !isRestTimerMinimized
-        }
-      >
-        <Dialog.Portal>
-          <Dialog.Overlay className={styles.dialogOverlay} />
-          <div className={styles.dialogViewport}>
-            <Dialog.Content
-              className={styles.restTimerDialogContent}
-              onEscapeKeyDown={(event) => {
-                event.preventDefault();
-                setIsRestTimerMinimized(true);
-              }}
-              onPointerDownOutside={(event) => {
-                event.preventDefault();
-                setIsRestTimerMinimized(true);
-              }}
-            >
-              {activeRestTimer ? (
-                <>
-                  <div className={styles.restTimerText} aria-live="polite">
-                    <Dialog.Title className={styles.restTimerLabel}>
-                      {remainingRestSeconds > 0
-                        ? messages.restTimerLabel
-                        : messages.restTimerCompleteLabel}
-                    </Dialog.Title>
-                    <p className={styles.restTimerValue}>
-                      {formatTimerDuration(remainingRestSeconds)}
-                    </p>
-                    <Dialog.Description className={styles.restTimerMeta}>
-                      {messages.restTimerDuration.replace(
-                        "{seconds}",
-                        String(activeRestTimer.durationSeconds),
-                      )}
-                    </Dialog.Description>
-                  </div>
-                  <div className={styles.restTimerActions}>
-                    <button
-                      className={styles.button({ variant: "primary" })}
-                      type="button"
-                      onClick={() => setIsRestTimerMinimized(true)}
-                    >
-                      <ChevronDown className={styles.icon} aria-hidden="true" />
-                      <span>{messages.hideTimerAction}</span>
-                    </button>
-                    <button
-                      className={styles.button({ variant: "secondary" })}
-                      type="button"
-                      disabled={isClearingTimer}
-                      onClick={() => void clearRestTimer()}
-                    >
-                      <X className={styles.icon} aria-hidden="true" />
-                      <span>{messages.skipTimerAction}</span>
-                    </button>
-                  </div>
-                </>
-              ) : null}
-            </Dialog.Content>
-          </div>
-        </Dialog.Portal>
-      </Dialog.Root>
-
-      {isActive && activeRestTimer && isRestTimerMinimized ? (
+      {isActive && activeRestTimer ? (
         <div className={styles.restTimerPill}>
-          <button
-            className={styles.restTimerPillMain}
-            type="button"
-            aria-label={messages.showTimerAriaLabel}
-            onClick={() => setIsRestTimerMinimized(false)}
-          >
+          <div className={styles.restTimerPillMain} aria-live="polite">
             <Timer className={styles.restTimerPillIcon} aria-hidden="true" />
             <span className={styles.restTimerPillLabel}>
               {remainingRestSeconds > 0 ? messages.restTimerLabel : messages.restTimerCompleteLabel}
@@ -1580,7 +1801,7 @@ export const ActiveWorkoutScreen = ({
             <span className={styles.restTimerPillTime}>
               {formatTimerDuration(remainingRestSeconds)}
             </span>
-          </button>
+          </div>
           <button
             className={styles.restTimerPillSkip}
             type="button"
@@ -1747,7 +1968,7 @@ export const ActiveWorkoutScreen = ({
                   <div className={styles.setFields}>
                     <label className={styles.setField}>
                       <span className={styles.setLabel}>
-                        {editingSetContext.tracksDuration
+                        {editingSetContext.trackingMode === "timed"
                           ? messages.durationLabel
                           : messages.repsLabel}
                       </span>
@@ -1757,36 +1978,42 @@ export const ActiveWorkoutScreen = ({
                         inputMode="numeric"
                         pattern="[0-9]*"
                         value={
-                          editingSetContext.tracksDuration
+                          editingSetContext.trackingMode === "timed"
                             ? setEditDraft.durationSeconds
                             : setEditDraft.reps
                         }
                         placeholder={
-                          editingSetContext.tracksDuration
+                          editingSetContext.trackingMode === "timed"
                             ? messages.durationPlaceholder
                             : messages.repsPlaceholder
                         }
                         onChange={(event) =>
                           updateSetEditDraft(
-                            editingSetContext.tracksDuration ? "durationSeconds" : "reps",
+                            editingSetContext.trackingMode === "timed" ? "durationSeconds" : "reps",
                             event.currentTarget.value,
                           )
                         }
                       />
                     </label>
-                    <label className={styles.setField}>
-                      <span className={styles.setLabel}>{messages.weightLabel}</span>
-                      <input
-                        className={styles.setInput}
-                        type="text"
-                        inputMode="decimal"
-                        value={setEditDraft.weight}
-                        placeholder={messages.weightPlaceholder}
-                        onChange={(event) =>
-                          updateSetEditDraft("weight", event.currentTarget.value)
-                        }
-                      />
-                    </label>
+                    {editingSetContext.trackingMode !== "bodyweight" ? (
+                      <label className={styles.setField}>
+                        <span className={styles.setLabel}>
+                          {editingSetContext.trackingMode === "assisted"
+                            ? messages.assistanceLabel
+                            : messages.weightLabel}
+                        </span>
+                        <input
+                          className={styles.setInput}
+                          type="text"
+                          inputMode="decimal"
+                          value={setEditDraft.weight}
+                          placeholder={messages.weightPlaceholder}
+                          onChange={(event) =>
+                            updateSetEditDraft("weight", event.currentTarget.value)
+                          }
+                        />
+                      </label>
+                    ) : null}
                     <label className={styles.setField}>
                       <span className={styles.setLabel}>{messages.restSecondsLabel}</span>
                       <input

@@ -1,4 +1,5 @@
 import { databaseVersion, db as defaultDatabase, type LiftLogDatabase } from "../database";
+import { normalizeExerciseTrackingMode, normalizeMuscleGroupIds } from "../exercise-semantics";
 import type {
   ActiveWorkout,
   AppSettings,
@@ -51,6 +52,33 @@ const localDataExportStoreKeys = [
 
 /** Oldest export schema that can be normalized into the current data model. */
 const minimumCompatibleDatabaseVersion = 2;
+
+/** Exercise shape accepted from exports that predate canonical tracking modes. */
+type CompatibleImportedExercise = Omit<Exercise, "trackingMode"> & {
+  /** Canonical mode when supplied by a current export. */
+  trackingMode?: unknown;
+
+  /** Older timed-exercise flag. */
+  tracksDuration?: boolean;
+
+  /** Older assisted-exercise flag. */
+  tracksAssistance?: boolean;
+};
+
+/** Normalizes an imported exercise into the current persistence model. */
+const normalizeImportedExercise = (exercise: Exercise): Exercise => {
+  const compatibleExercise = exercise as CompatibleImportedExercise;
+  const { tracksAssistance, tracksDuration, ...currentFields } = compatibleExercise;
+
+  return {
+    ...currentFields,
+    muscleGroups: normalizeMuscleGroupIds(compatibleExercise.muscleGroups),
+    trackingMode: normalizeExerciseTrackingMode(compatibleExercise.trackingMode, {
+      tracksAssistance,
+      tracksDuration,
+    }),
+  } as Exercise;
+};
 
 /** Checks that an untrusted store record is an object carrying a string id key. */
 const hasStringId = (record: unknown): boolean => {
@@ -178,14 +206,7 @@ export const createLocalDataRepository = ({
           ]);
           await Promise.all([
             database.activeWorkout.bulkPut(data.activeWorkout),
-            database.exercises.bulkPut(
-              data.exercises.map((exercise) => ({
-                ...exercise,
-                tracksAssistance: exercise.tracksDuration
-                  ? false
-                  : (exercise.tracksAssistance ?? false),
-              })),
-            ),
+            database.exercises.bulkPut(data.exercises.map(normalizeImportedExercise)),
             database.settings.bulkPut(
               data.settings.map((settings) => ({
                 ...settings,

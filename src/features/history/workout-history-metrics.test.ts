@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { WorkoutSession } from "@/db";
 import {
+  calculateSessionDurationMinutes,
   calculateSessionVolume,
   getWorkoutDateGroup,
   getWorkoutDayDistance,
@@ -16,7 +17,12 @@ const iso = (day: number, hour = 12): string => new Date(2026, 6, day, hour, 0, 
 /** Builds a finished session with optional sets and a distinct start timestamp. */
 const buildSession = (
   finishedAt: string,
-  sets: { weight: number | null; reps: number | null }[] = [],
+  sets: {
+    weight: number | null;
+    reps: number | null;
+    completedAt?: string | null;
+    isCompleted?: boolean;
+  }[] = [],
   startedAt: string = finishedAt,
 ): WorkoutSession => {
   return {
@@ -37,8 +43,8 @@ const buildSession = (
           reps: set.reps,
           weight: set.weight,
           weightUnit: "kg",
-          isCompleted: true,
-          completedAt: null,
+          isCompleted: set.isCompleted ?? true,
+          completedAt: set.completedAt ?? null,
           restSeconds: null,
           notes: null,
         })),
@@ -93,5 +99,35 @@ describe("workout history metrics", () => {
 
   it("returns zero volume for a session with no logged sets", () => {
     expect(calculateSessionVolume(buildSession(iso(17)))).toBe(0);
+  });
+
+  it("excludes uncompleted set drafts from session volume", () => {
+    const session = buildSession(iso(17), [
+      { weight: 100, reps: 5 },
+      { weight: 120, reps: 5, isCompleted: false },
+    ]);
+
+    expect(calculateSessionVolume(session)).toBe(500);
+  });
+
+  it("uses completed-set timestamps instead of a stale session finish time", () => {
+    const session = buildSession(
+      iso(17, 20),
+      [
+        { weight: 50, reps: 8, completedAt: iso(17, 9) },
+        { weight: 50, reps: 8, completedAt: iso(17, 10) },
+      ],
+      iso(17, 8),
+    );
+
+    expect(calculateSessionDurationMinutes(session)).toBe(60);
+  });
+
+  it("excludes an obvious duration outlier without completed-set timestamps", () => {
+    expect(calculateSessionDurationMinutes(buildSession(iso(17, 20), [], iso(17, 8)))).toBeNull();
+  });
+
+  it("falls back to a reasonable start-to-finish duration", () => {
+    expect(calculateSessionDurationMinutes(buildSession(iso(17, 10), [], iso(17, 9)))).toBe(60);
   });
 });

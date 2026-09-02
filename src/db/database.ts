@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 
+import { normalizeExerciseTrackingMode, normalizeMuscleGroupIds } from "./exercise-semantics";
 import type {
   ActiveWorkout,
   AppSettings,
@@ -12,7 +13,7 @@ import type {
 export const databaseName = "lift-log";
 
 /** Current Dexie schema version for the app database. */
-export const databaseVersion = 3;
+export const databaseVersion = 4;
 
 /** Singleton settings record id. */
 export const appSettingsId = "app" satisfies AppSettings["id"];
@@ -34,6 +35,9 @@ const schemaV2 = schemaV1;
 
 /** Dexie store definitions for the third schema version. */
 const schemaV3 = schemaV2;
+
+/** Dexie store definitions for the fourth schema version. */
+const schemaV4 = schemaV3;
 
 /** Typed Dexie database containing all local-first app stores. */
 export type LiftLogDatabase = Dexie & {
@@ -67,11 +71,31 @@ const migrateAppSettingsInsights = (settings: AppSettings): void => {
   settings.weeklyWorkoutTarget ??= 3;
 };
 
-/** Adds exercise progress semantics to records created before schema version 3. */
-const migrateExerciseProgressSemantics = (exercise: Exercise): void => {
+/** Exercise shape accepted while upgrading records that predate canonical tracking modes. */
+type LegacyExerciseRecord = Omit<Exercise, "trackingMode"> & {
+  /** Canonical mode when the record was already normalized by an import. */
+  trackingMode?: unknown;
+
+  /** Older timed-exercise flag. */
+  tracksDuration?: boolean;
+
+  /** Older assisted-exercise flag. */
+  tracksAssistance?: boolean;
+};
+
+/** Adds interim exercise progress semantics to records created before schema version 3. */
+const migrateExerciseProgressSemantics = (exercise: LegacyExerciseRecord): void => {
   exercise.tracksAssistance = exercise.tracksDuration
     ? false
     : (exercise.tracksAssistance ?? false);
+};
+
+/** Normalizes muscle groups and consolidates legacy tracking flags for schema version 4. */
+const migrateExerciseSemantics = (exercise: LegacyExerciseRecord): void => {
+  exercise.muscleGroups = normalizeMuscleGroupIds(exercise.muscleGroups);
+  exercise.trackingMode = normalizeExerciseTrackingMode(exercise.trackingMode, exercise);
+  delete exercise.tracksAssistance;
+  delete exercise.tracksDuration;
 };
 
 /** Creates a typed Dexie database instance with the current schema applied. */
@@ -102,6 +126,15 @@ export const createLiftLogDatabase = (name = databaseName): LiftLogDatabase => {
           .toCollection()
           .modify((exercise) => migrateExerciseProgressSemantics(exercise)),
       ]);
+    });
+  database
+    .version(4)
+    .stores(schemaV4)
+    .upgrade(async (transaction) => {
+      await transaction
+        .table("exercises")
+        .toCollection()
+        .modify((exercise) => migrateExerciseSemantics(exercise));
     });
 
   return database;

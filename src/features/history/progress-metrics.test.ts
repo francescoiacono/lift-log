@@ -59,8 +59,7 @@ const benchExercise = {
   name: "Bench press",
   muscleGroups: ["Chest"],
   equipment: "Barbell",
-  tracksDuration: false,
-  tracksAssistance: false,
+  trackingMode: "weighted",
   notes: null,
   createdAt: timestamp,
   updatedAt: timestamp,
@@ -168,7 +167,7 @@ describe("buildExerciseProgress", () => {
   });
 
   it("treats lower assistance as progress", () => {
-    const progress = buildExerciseProgress({ ...benchExercise, tracksAssistance: true }, [
+    const progress = buildExerciseProgress({ ...benchExercise, trackingMode: "assisted" }, [
       createSession("first", "2026-08-18T10:00:00.000Z", [createSet({ weight: 40 })]),
       createSession("second", "2026-08-25T10:00:00.000Z", [createSet({ weight: 35 })]),
     ]);
@@ -177,8 +176,28 @@ describe("buildExerciseProgress", () => {
     expect(progress.points[1]?.isPersonalRecord).toBe(true);
   });
 
+  it("recognizes zero assistance as the best assisted performance", () => {
+    const progress = buildExerciseProgress({ ...benchExercise, trackingMode: "assisted" }, [
+      createSession("first", "2026-08-18T10:00:00.000Z", [createSet({ weight: 10 })]),
+      createSession("second", "2026-08-25T10:00:00.000Z", [createSet({ weight: 0 })]),
+    ]);
+
+    expect(progress.points[1]).toMatchObject({ value: 0, isPersonalRecord: true });
+  });
+
+  it("uses repetitions for bodyweight exercises even when old sets contain weight", () => {
+    const progress = buildExerciseProgress({ ...benchExercise, trackingMode: "bodyweight" }, [
+      createSession("first", "2026-08-18T10:00:00.000Z", [createSet({ reps: 8, weight: 10 })]),
+      createSession("second", "2026-08-25T10:00:00.000Z", [createSet({ reps: 10, weight: 5 })]),
+    ]);
+
+    expect(progress.kind).toBe("repetitions");
+    expect(progress.points.map((point) => point.value)).toEqual([8, 10]);
+    expect(progress.points[1]?.isPersonalRecord).toBe(true);
+  });
+
   it("uses hold duration for timed exercises", () => {
-    const progress = buildExerciseProgress({ ...benchExercise, tracksDuration: true }, [
+    const progress = buildExerciseProgress({ ...benchExercise, trackingMode: "timed" }, [
       createSession("first", "2026-08-18T10:00:00.000Z", [
         createSet({ durationSeconds: 30, reps: null, weight: null }),
       ]),

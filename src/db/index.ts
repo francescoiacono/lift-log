@@ -9,6 +9,12 @@ export {
 export type { LiftLogDatabase } from "./database";
 export { createEntityId, createIsoDateTime } from "./persistence-utils";
 export {
+  formatMuscleGroupLabel,
+  normalizeExerciseTrackingMode,
+  normalizeMuscleGroupId,
+  normalizeMuscleGroupIds,
+} from "./exercise-semantics";
+export {
   createExerciseRepository,
   createLocalDataRepository,
   createSettingsRepository,
@@ -32,7 +38,9 @@ export type {
   AppSettings,
   EntityId,
   Exercise,
+  ExerciseTrackingMode,
   IsoDateTime,
+  MuscleGroupId,
   WeightUnit,
   WorkoutSession,
   WorkoutSessionExercise,

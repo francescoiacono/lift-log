@@ -30,9 +30,9 @@ const createTestDatabase = () => {
 const exercise = {
   id: "exercise-1",
   name: "Bench press",
-  muscleGroups: ["Chest"],
+  muscleGroups: ["chest"],
   equipment: "Barbell",
-  tracksAssistance: false,
+  trackingMode: "weighted",
   notes: null,
   createdAt: "2026-05-07T10:00:00.000Z",
   updatedAt: "2026-05-07T10:00:00.000Z",
@@ -151,7 +151,7 @@ describe("createLocalDataRepository", () => {
         {
           id: exercise.id,
           name: exercise.name,
-          muscleGroups: exercise.muscleGroups,
+          muscleGroups: ["Deltoids", "triceps", "Triceps"],
           equipment: exercise.equipment,
           notes: exercise.notes,
           createdAt: exercise.createdAt,
@@ -175,7 +175,8 @@ describe("createLocalDataRepository", () => {
     await repository.importData(legacyExport);
 
     await expect(testDatabase.exercises.get(exercise.id)).resolves.toMatchObject({
-      tracksAssistance: false,
+      muscleGroups: ["shoulders", "triceps"],
+      trackingMode: "weighted",
     });
     await expect(testDatabase.settings.get(appSettingsId)).resolves.toMatchObject({
       weeklyWorkoutTarget: 3,

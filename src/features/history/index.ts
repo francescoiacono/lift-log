@@ -1,6 +1,10 @@
 export { WorkoutHistory } from "./workout-history";
 export type { WorkoutHistoryProps } from "./workout-history";
 export {
+  calculateSessionDurationMinutes,
+  maximumReliableWorkoutDurationMinutes,
+} from "./workout-history-metrics";
+export {
   buildExerciseProgress,
   buildWeeklyTrainingSummaries,
   calculatePlanAdherence,

@@ -7,6 +7,12 @@ export type IsoDateTime = string;
 /** Weight unit values supported by workout logging. */
 export type WeightUnit = "kg" | "lb";
 
+/** Stable tracking semantics used to compare exercise performance. */
+export type ExerciseTrackingMode = "assisted" | "bodyweight" | "timed" | "weighted";
+
+/** Normalized kebab-case identifier for a trained muscle group. */
+export type MuscleGroupId = string;
+
 /** Lifecycle states for persisted workout sessions. */
 export type WorkoutSessionStatus = "active" | "finished" | "discarded";
 
@@ -18,20 +24,14 @@ export type Exercise = {
   /** User-facing exercise name. */
   name: string;
 
-  /** Muscle groups associated with the exercise. */
-  muscleGroups: string[];
+  /** Normalized muscle-group identifiers associated with the exercise. */
+  muscleGroups: MuscleGroupId[];
 
   /** Equipment required for the exercise, when any. */
   equipment: string | null;
 
-  /**
-   * Whether sets for this exercise are tracked as a timed hold (e.g. planks)
-   * instead of repetitions. Absent is treated as false.
-   */
-  tracksDuration?: boolean;
-
-  /** Whether logged weight represents assistance, where a lower value indicates progress. */
-  tracksAssistance?: boolean;
+  /** How sets are entered and compared for progress. */
+  trackingMode: ExerciseTrackingMode;
 
   /** Optional user notes for setup, cues, or substitutions. */
   notes: string | null;

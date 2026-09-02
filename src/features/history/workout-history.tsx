@@ -7,6 +7,7 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import { ProgressOverview } from "./progress-overview";
 import { styles } from "./workout-history.styles";
 import {
+  calculateSessionDurationMinutes,
   calculateSessionVolume,
   getWorkoutDayDistance,
   groupSessionsByRecency,
@@ -98,18 +99,14 @@ const formatVolume = (session: WorkoutSession, messages: WorkoutHistoryMessages)
 
 /** Formats a saved workout duration in whole minutes. */
 const formatWorkoutDuration = (
-  startedAt: string,
-  finishedAt: string | null,
+  session: WorkoutSession,
   messages: WorkoutHistoryMessages,
 ): string => {
-  if (!finishedAt) {
-    return formatCountMessage(messages.durationMinutePlural, 0);
-  }
+  const durationMinutes = calculateSessionDurationMinutes(session);
 
-  const durationMinutes = Math.max(
-    1,
-    Math.round((new Date(finishedAt).getTime() - new Date(startedAt).getTime()) / 60_000),
-  );
+  if (durationMinutes === null) {
+    return messages.durationUnavailable;
+  }
 
   return durationMinutes === 1
     ? messages.durationMinuteSingular
@@ -127,16 +124,19 @@ const formatSetCount = (count: number, messages: WorkoutHistoryMessages): string
     : formatCountMessage(messages.setCountPlural, count);
 };
 
-/** Counts all sets logged in a saved workout session. */
+/** Counts completed sets logged in a saved workout session. */
 const countWorkoutSets = (session: WorkoutSession): number => {
-  return session.exercises.reduce((totalSets, exercise) => totalSets + exercise.sets.length, 0);
+  return session.exercises.reduce(
+    (totalSets, exercise) => totalSets + exercise.sets.filter((set) => set.isCompleted).length,
+    0,
+  );
 };
 
 /** Formats the compact metadata line for a saved workout card. */
 const formatWorkoutMeta = (session: WorkoutSession, messages: WorkoutHistoryMessages): string => {
   return messages.historyMeta
     .replace("{date}", formatWorkoutDate(session))
-    .replace("{duration}", formatWorkoutDuration(session.startedAt, session.finishedAt, messages))
+    .replace("{duration}", formatWorkoutDuration(session, messages))
     .replace("{sets}", formatSetCount(countWorkoutSets(session), messages))
     .replace("{volume}", formatVolume(session, messages));
 };

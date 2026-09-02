@@ -1,6 +1,39 @@
-import type { EntityId, IsoDateTime, WorkoutSession, WorkoutSet } from "@/db";
+import type {
+  EntityId,
+  Exercise,
+  IsoDateTime,
+  MuscleGroupId,
+  WorkoutSession,
+  WorkoutSet,
+  WorkoutTemplate,
+} from "@/db";
 
 const millisecondsPerDay = 86_400_000;
+const millisecondsPerHour = 3_600_000;
+
+/** Recovery labels shown for normalized muscle groups on Today. */
+export type MuscleRecoveryState = "ready" | "recent" | "rest";
+
+/** Recovery status derived from the most recent completed work for one muscle group. */
+export type MuscleRecoveryStatus = {
+  /** Stable normalized muscle-group identifier. */
+  muscleGroupId: MuscleGroupId;
+
+  /** Number of local calendar days since training, or null when never trained. */
+  daysSinceTrained: number | null;
+
+  /** Compact readiness bucket used by the Today screen. */
+  state: MuscleRecoveryState;
+};
+
+/** Workout plan selected as the most useful next action. */
+export type WorkoutRecommendation = {
+  /** Suggested reusable workout template. */
+  template: WorkoutTemplate;
+
+  /** Calendar days since this plan was last completed, or null when it is new. */
+  daysSinceLastSession: number | null;
+};
 
 /** Sets logged for an exercise in its most recent finished session. */
 export type LastSessionSets = {
@@ -19,21 +52,27 @@ export const findLastSessionSets = (
   let latest: LastSessionSets | undefined;
 
   for (const session of finishedSessions) {
-    const sessionExercise = session.exercises.find(
-      (exercise) => exercise.exerciseId === exerciseId && exercise.sets.length > 0,
-    );
+    const completedSets = session.exercises
+      .filter((exercise) => exercise.exerciseId === exerciseId)
+      .flatMap((exercise) => exercise.sets)
+      .filter((set) => set.isCompleted);
 
-    if (!sessionExercise) {
+    if (session.status !== "finished" || completedSets.length === 0) {
       continue;
     }
 
-    if (latest && new Date(session.startedAt).getTime() <= new Date(latest.startedAt).getTime()) {
+    const sessionStartedAtMs = new Date(session.startedAt).getTime();
+
+    if (
+      !Number.isFinite(sessionStartedAtMs) ||
+      (latest && sessionStartedAtMs <= new Date(latest.startedAt).getTime())
+    ) {
       continue;
     }
 
     latest = {
       startedAt: session.startedAt,
-      sets: [...sessionExercise.sets].sort((first, second) => first.order - second.order),
+      sets: completedSets.sort((first, second) => first.order - second.order),
     };
   }
 
@@ -64,8 +103,9 @@ export const calculateTrainingDayStreak = (
   const sortedDays = [
     ...new Set(
       sessions
-        .map((session) => getLocalDayStartMs(session.startedAt))
-        .filter((dayStartMs) => dayStartMs <= todayStartMs),
+        .filter((session) => session.status === "finished")
+        .map((session) => getLocalDayStartMs(session.finishedAt ?? session.startedAt))
+        .filter((dayStartMs) => Number.isFinite(dayStartMs) && dayStartMs <= todayStartMs),
     ),
   ].sort((firstDay, secondDay) => secondDay - firstDay);
 
@@ -92,4 +132,155 @@ export const calculateTrainingDayStreak = (
   }
 
   return streak;
+};
+
+/** Chooses the plan that has gone the longest without a completed session. */
+export const recommendWorkoutTemplate = (
+  templates: WorkoutTemplate[],
+  sessions: WorkoutSession[],
+  now = new Date(),
+): WorkoutRecommendation | undefined => {
+  const nowMs = now.getTime();
+  const latestSessionByTemplateId = new Map<EntityId, number>();
+
+  for (const session of sessions) {
+    if (session.status !== "finished" || !session.templateId) {
+      continue;
+    }
+
+    const sessionMs = new Date(session.finishedAt ?? session.startedAt).getTime();
+
+    if (!Number.isFinite(sessionMs) || sessionMs > nowMs) {
+      continue;
+    }
+
+    const latestSessionMs = latestSessionByTemplateId.get(session.templateId);
+
+    if (latestSessionMs === undefined || sessionMs > latestSessionMs) {
+      latestSessionByTemplateId.set(session.templateId, sessionMs);
+    }
+  }
+
+  const recommendation = [...templates].sort((firstTemplate, secondTemplate) => {
+    const firstSessionMs = latestSessionByTemplateId.get(firstTemplate.id);
+    const secondSessionMs = latestSessionByTemplateId.get(secondTemplate.id);
+
+    if (firstSessionMs === undefined && secondSessionMs !== undefined) {
+      return -1;
+    }
+
+    if (firstSessionMs !== undefined && secondSessionMs === undefined) {
+      return 1;
+    }
+
+    if (firstSessionMs !== secondSessionMs) {
+      return (firstSessionMs ?? 0) - (secondSessionMs ?? 0);
+    }
+
+    return firstTemplate.name.localeCompare(secondTemplate.name);
+  })[0];
+
+  if (!recommendation) {
+    return undefined;
+  }
+
+  const latestSessionMs = latestSessionByTemplateId.get(recommendation.id);
+
+  return {
+    template: recommendation,
+    daysSinceLastSession:
+      latestSessionMs === undefined
+        ? null
+        : getCalendarDayDistance(
+            getLocalDateStartMs(now),
+            getLocalDateStartMs(new Date(latestSessionMs)),
+          ),
+  };
+};
+
+/** Builds compact recovery buckets from each muscle group's latest completed workout. */
+export const buildMuscleRecoveryStatuses = (
+  exercises: Exercise[],
+  sessions: WorkoutSession[],
+  now = new Date(),
+): MuscleRecoveryStatus[] => {
+  const exerciseById = new Map(exercises.map((exercise) => [exercise.id, exercise]));
+  const latestTrainingByMuscleGroup = new Map<MuscleGroupId, number>();
+  const allMuscleGroups = new Set(exercises.flatMap((exercise) => exercise.muscleGroups));
+  const nowMs = now.getTime();
+
+  for (const session of sessions) {
+    if (session.status !== "finished") {
+      continue;
+    }
+
+    const sessionMs = new Date(session.finishedAt ?? session.startedAt).getTime();
+
+    if (!Number.isFinite(sessionMs) || sessionMs > nowMs) {
+      continue;
+    }
+
+    for (const sessionExercise of session.exercises) {
+      if (!sessionExercise.sets.some((set) => set.isCompleted)) {
+        continue;
+      }
+
+      for (const muscleGroupId of exerciseById.get(sessionExercise.exerciseId)?.muscleGroups ??
+        []) {
+        const latestTrainingMs = latestTrainingByMuscleGroup.get(muscleGroupId);
+
+        if (latestTrainingMs === undefined || sessionMs > latestTrainingMs) {
+          latestTrainingByMuscleGroup.set(muscleGroupId, sessionMs);
+        }
+      }
+    }
+  }
+
+  const todayStartMs = getLocalDateStartMs(now);
+
+  return [...allMuscleGroups]
+    .map((muscleGroupId): MuscleRecoveryStatus => {
+      const latestTrainingMs = latestTrainingByMuscleGroup.get(muscleGroupId);
+      const daysSinceTrained =
+        latestTrainingMs === undefined
+          ? null
+          : getCalendarDayDistance(todayStartMs, getLocalDateStartMs(new Date(latestTrainingMs)));
+      const state: MuscleRecoveryState =
+        daysSinceTrained === null || daysSinceTrained >= 4
+          ? "ready"
+          : daysSinceTrained >= 2
+            ? "recent"
+            : "rest";
+
+      return { muscleGroupId, daysSinceTrained, state };
+    })
+    .sort((firstStatus, secondStatus) => {
+      const stateOrder: Record<MuscleRecoveryState, number> = { ready: 0, recent: 1, rest: 2 };
+      const stateDifference = stateOrder[firstStatus.state] - stateOrder[secondStatus.state];
+
+      return stateDifference || firstStatus.muscleGroupId.localeCompare(secondStatus.muscleGroupId);
+    });
+};
+
+/** Returns the session age when an active workout appears abandoned, otherwise null. */
+export const getStaleWorkoutAgeHours = (
+  session: WorkoutSession | undefined,
+  now = new Date(),
+): number | null => {
+  if (!session || session.status !== "active") {
+    return null;
+  }
+
+  const nowMs = now.getTime();
+  const startedAtMs = new Date(session.startedAt).getTime();
+  const latestActivityMs = Math.max(
+    new Date(session.updatedAt).getTime(),
+    ...session.exercises
+      .flatMap((exercise) => exercise.sets)
+      .map((set) => new Date(set.completedAt ?? session.startedAt).getTime()),
+  );
+  const ageHours = Math.floor((nowMs - startedAtMs) / millisecondsPerHour);
+  const idleHours = (nowMs - latestActivityMs) / millisecondsPerHour;
+
+  return ageHours >= 6 && idleHours >= 2 ? ageHours : null;
 };

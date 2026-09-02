@@ -278,7 +278,8 @@ const getWeeklyTooltipInlineTransform = (index: number, total: number): string =
 
 /** Renders aligned weekly sets and volume bars. */
 const WeeklyTrendChart = ({ summaries, weightUnit, messages }: WeeklyTrendChartProps) => {
-  const tooltipId = useId();
+  const setsTooltipId = useId();
+  const volumeTooltipId = useId();
   const [activePoint, setActivePoint] = useState<ActiveWeeklyPoint | null>(null);
   const maximumSetCount = Math.max(
     1,
@@ -325,7 +326,7 @@ const WeeklyTrendChart = ({ summaries, weightUnit, messages }: WeeklyTrendChartP
                 role="button"
                 tabIndex={0}
                 aria-label={formatWeeklySetsPoint(summary, messages)}
-                aria-describedby={isActive ? tooltipId : undefined}
+                aria-describedby={isActive ? setsTooltipId : undefined}
                 aria-expanded={isActive}
                 data-active={isActive}
                 key={summary.weekStartedAt}
@@ -375,7 +376,7 @@ const WeeklyTrendChart = ({ summaries, weightUnit, messages }: WeeklyTrendChartP
         {activePoint?.kind === "sets" && activeSummary ? (
           <div
             className={styles.chartTooltip}
-            id={tooltipId}
+            id={setsTooltipId}
             role="tooltip"
             style={{
               insetBlockStart: "30px",
@@ -402,6 +403,15 @@ const WeeklyTrendChart = ({ summaries, weightUnit, messages }: WeeklyTrendChartP
             <div className={styles.chartTooltipRow}>
               <span>{messages.weeklyTooltipPlannedSetsLabel}</span>
               <strong>{formatNumber(activeSummary.plannedSetCount)}</strong>
+            </div>
+            <div className={styles.chartTooltipRow}>
+              <span>{messages.weeklyTooltipVolumeLabel}</span>
+              <strong>
+                {`${formatNumber(activeSummary.volume)} ${messages.volumeUnit.replace(
+                  "{unit}",
+                  weightUnit,
+                )}`}
+              </strong>
             </div>
           </div>
         ) : null}
@@ -434,7 +444,7 @@ const WeeklyTrendChart = ({ summaries, weightUnit, messages }: WeeklyTrendChartP
                 role="button"
                 tabIndex={0}
                 aria-label={formatWeeklyVolumePoint(summary, weightUnit, messages)}
-                aria-describedby={isActive ? tooltipId : undefined}
+                aria-describedby={isActive ? volumeTooltipId : undefined}
                 aria-expanded={isActive}
                 data-active={isActive}
                 key={summary.weekStartedAt}
@@ -478,7 +488,7 @@ const WeeklyTrendChart = ({ summaries, weightUnit, messages }: WeeklyTrendChartP
         {activePoint?.kind === "volume" && activeSummary ? (
           <div
             className={styles.chartTooltip}
-            id={tooltipId}
+            id={volumeTooltipId}
             role="tooltip"
             style={{
               insetBlockEnd: "calc(100% + 8px)",
@@ -506,6 +516,10 @@ const WeeklyTrendChart = ({ summaries, weightUnit, messages }: WeeklyTrendChartP
             <div className={styles.chartTooltipRow}>
               <span>{messages.weeklyTooltipCompletedSetsLabel}</span>
               <strong>{formatNumber(activeSummary.completedSetCount)}</strong>
+            </div>
+            <div className={styles.chartTooltipRow}>
+              <span>{messages.weeklyTooltipPlannedSetsLabel}</span>
+              <strong>{formatNumber(activeSummary.plannedSetCount)}</strong>
             </div>
             <div className={styles.chartTooltipRow}>
               <span>{messages.weeklyTooltipWorkoutsLabel}</span>

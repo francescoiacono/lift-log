@@ -1,5 +1,6 @@
 import { db as defaultDatabase, type LiftLogDatabase } from "../database";
-import type { EntityId, Exercise, IsoDateTime } from "../entities";
+import { normalizeMuscleGroupIds } from "../exercise-semantics";
+import type { EntityId, Exercise, ExerciseTrackingMode, IsoDateTime } from "../entities";
 import { createEntityId, createIsoDateTime } from "../persistence-utils";
 
 /** Data required to create an exercise record. */
@@ -13,11 +14,8 @@ export type CreateExerciseInput = {
   /** Equipment required for the exercise, when any. */
   equipment?: string | null;
 
-  /** Whether sets are tracked as a timed hold instead of repetitions. */
-  tracksDuration?: boolean;
-
-  /** Whether logged weight represents assistance rather than resistance. */
-  tracksAssistance?: boolean;
+  /** How sets are entered and compared for progress. */
+  trackingMode?: ExerciseTrackingMode;
 
   /** Optional user notes for setup, cues, or substitutions. */
   notes?: string | null;
@@ -34,11 +32,8 @@ export type UpdateExerciseInput = {
   /** Equipment required for the exercise, when any. */
   equipment?: string | null;
 
-  /** Whether sets are tracked as a timed hold instead of repetitions. */
-  tracksDuration?: boolean;
-
-  /** Whether logged weight represents assistance rather than resistance. */
-  tracksAssistance?: boolean;
+  /** How sets are entered and compared for progress. */
+  trackingMode?: ExerciseTrackingMode;
 
   /** Optional user notes for setup, cues, or substitutions. */
   notes?: string | null;
@@ -82,17 +77,9 @@ const toNullableText = (value: string | null | undefined): string | null => {
 /** Builds a partial exercise patch while ignoring omitted update fields. */
 const toExercisePatch = (
   input: UpdateExerciseInput,
-): Partial<
-  Pick<
-    Exercise,
-    "equipment" | "muscleGroups" | "name" | "notes" | "tracksAssistance" | "tracksDuration"
-  >
-> => {
+): Partial<Pick<Exercise, "equipment" | "muscleGroups" | "name" | "notes" | "trackingMode">> => {
   const patch: Partial<
-    Pick<
-      Exercise,
-      "equipment" | "muscleGroups" | "name" | "notes" | "tracksAssistance" | "tracksDuration"
-    >
+    Pick<Exercise, "equipment" | "muscleGroups" | "name" | "notes" | "trackingMode">
   > = {};
 
   if (input.name !== undefined) {
@@ -100,19 +87,15 @@ const toExercisePatch = (
   }
 
   if (input.muscleGroups !== undefined) {
-    patch.muscleGroups = input.muscleGroups;
+    patch.muscleGroups = normalizeMuscleGroupIds(input.muscleGroups);
   }
 
   if (input.equipment !== undefined) {
     patch.equipment = input.equipment;
   }
 
-  if (input.tracksDuration !== undefined) {
-    patch.tracksDuration = input.tracksDuration;
-  }
-
-  if (input.tracksAssistance !== undefined) {
-    patch.tracksAssistance = input.tracksAssistance;
+  if (input.trackingMode !== undefined) {
+    patch.trackingMode = input.trackingMode;
   }
 
   if (input.notes !== undefined) {
@@ -142,14 +125,12 @@ export const createExerciseRepository = ({
     /** Creates a new exercise. */
     create: async (input) => {
       const timestamp = now();
-      const tracksDuration = input.tracksDuration ?? false;
       const exercise: Exercise = {
         id: createId(),
         name: input.name,
-        muscleGroups: input.muscleGroups,
+        muscleGroups: normalizeMuscleGroupIds(input.muscleGroups),
         equipment: toNullableText(input.equipment),
-        tracksAssistance: tracksDuration ? false : (input.tracksAssistance ?? false),
-        tracksDuration,
+        trackingMode: input.trackingMode ?? "weighted",
         notes: toNullableText(input.notes),
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -169,14 +150,9 @@ export const createExerciseRepository = ({
       }
 
       const patch = toExercisePatch(input);
-      const tracksDuration = patch.tracksDuration ?? existingExercise.tracksDuration ?? false;
       const updatedExercise: Exercise = {
         ...existingExercise,
         ...patch,
-        tracksAssistance: tracksDuration
-          ? false
-          : (patch.tracksAssistance ?? existingExercise.tracksAssistance ?? false),
-        tracksDuration,
         updatedAt: now(),
       };
 

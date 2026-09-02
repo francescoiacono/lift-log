@@ -1086,7 +1086,6 @@ export const ActiveWorkoutScreen = ({
         restSeconds: formatOptionalInteger(previousSet.restSeconds),
       },
     }));
-    setFeedbackMessage(messages.previousSetCopied);
   };
 
   /** Toggles one exercise card between open and closed states. */
@@ -1647,12 +1646,15 @@ export const ActiveWorkoutScreen = ({
                               <button
                                 className={styles.copyPreviousButton}
                                 type="button"
+                                aria-label={messages.copyPreviousSetAction}
                                 onClick={() =>
                                   copyPreviousSet(sessionExercise.exerciseId, previousSetToCopy)
                                 }
                               >
                                 <Copy className={styles.setActionIcon} aria-hidden="true" />
-                                <span>{messages.copyPreviousSetAction}</span>
+                                <span className={styles.copyPreviousLabel}>
+                                  {messages.copyPreviousSetAction}
+                                </span>
                               </button>
                             ) : null}
                           </div>

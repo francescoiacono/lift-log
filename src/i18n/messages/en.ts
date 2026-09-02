@@ -391,7 +391,6 @@ export const enMessages = {
     restSecondsPlaceholder: "120",
     lastSessionLabel: "Last time",
     copyPreviousSetAction: "Copy previous set",
-    previousSetCopied: "Previous set copied into the entry fields.",
     previousBestLabel: "Previous best",
     previousBestDuration: "{value}s",
     previousBestRepetitions: "{value} reps",

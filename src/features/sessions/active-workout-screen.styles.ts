@@ -1006,7 +1006,7 @@ export const styles = {
   }),
   lastSession: css({
     display: "grid",
-    gridTemplateColumns: { base: "auto minmax(0, 1fr)", sm: "auto minmax(0, 1fr) auto" },
+    gridTemplateColumns: "auto minmax(0, 1fr) auto",
     alignItems: "center",
     gap: "8px",
     marginBlock: "0",
@@ -1037,14 +1037,14 @@ export const styles = {
     minInlineSize: "0",
   }),
   copyPreviousButton: css({
-    gridColumn: { base: "1 / -1", sm: "auto" },
+    inlineSize: { base: "44px", sm: "auto" },
     minBlockSize: "44px",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    gap: "7px",
+    gap: { base: "0", sm: "7px" },
     paddingBlock: "8px",
-    paddingInline: "10px",
+    paddingInline: { base: "0", sm: "10px" },
     backgroundColor: "cardElevated",
     color: "accent",
     borderBlockWidth: "1px",
@@ -1059,6 +1059,9 @@ export const styles = {
     fontSize: "11px",
     fontWeight: "850",
     lineHeight: "1",
+  }),
+  copyPreviousLabel: css({
+    display: { base: "none", sm: "inline" },
   }),
   previousBest: css({
     display: "flex",

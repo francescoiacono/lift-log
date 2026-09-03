@@ -8,6 +8,7 @@ import { LocalDataSettings } from "@/features/settings";
 import { ActiveWorkoutScreen } from "@/features/sessions";
 import { WorkoutTemplateLibrary } from "@/features/workouts";
 import { defaultLocale, getMessages, type Locale } from "@/i18n";
+import type { EntityId } from "@/db";
 
 /** App-level screens currently available in the local-first MVP shell. */
 type AppView = "exercises" | "history" | "sessions" | "workouts";
@@ -24,6 +25,7 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
   const [activeView, setActiveView] = useState<AppView>("sessions");
   const [dataResetVersion, setDataResetVersion] = useState(0);
   const [initialWorkoutFeedback, setInitialWorkoutFeedback] = useState<string | null>(null);
+  const [selectedExerciseId, setSelectedExerciseId] = useState<EntityId | null>(null);
   const isExercisesActive = activeView === "exercises";
   const isHistoryActive = activeView === "history";
   const isSessionsActive = activeView === "sessions";
@@ -32,6 +34,7 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
   /** Moves the app back to a fresh workout start state after local data is reset. */
   const handleLocalDataReset = () => {
     setInitialWorkoutFeedback(messages.settings.resetSuccess);
+    setSelectedExerciseId(null);
     setDataResetVersion((currentVersion) => currentVersion + 1);
     setActiveView("sessions");
   };
@@ -39,6 +42,7 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
   /** Reloads all screens from the newly imported local data. */
   const handleLocalDataImported = () => {
     setInitialWorkoutFeedback(messages.settings.importSuccess);
+    setSelectedExerciseId(null);
     setDataResetVersion((currentVersion) => currentVersion + 1);
     setActiveView("sessions");
   };
@@ -93,7 +97,8 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           key={`exercises-${dataResetVersion}`}
           isActive={isExercisesActive}
           messages={messages.exercises}
-          onOpenHistory={() => setActiveView("history")}
+          selectedExerciseId={selectedExerciseId}
+          onSelectedExerciseChange={setSelectedExerciseId}
           onOpenWorkout={() => setActiveView("sessions")}
         />
       </div>
@@ -110,6 +115,10 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           key={`history-${dataResetVersion}`}
           isActive={isHistoryActive}
           messages={messages.history}
+          onOpenExercise={(exerciseId) => {
+            setSelectedExerciseId(exerciseId);
+            setActiveView("exercises");
+          }}
           onSessionStarted={() => setActiveView("sessions")}
         />
       </div>

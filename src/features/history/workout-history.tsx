@@ -49,6 +49,9 @@ export type WorkoutHistoryProps = {
 
   /** Called after a workout session has been started from history. */
   onSessionStarted?: () => void;
+
+  /** Opens a selected exercise's full progress detail. */
+  onOpenExercise?: (exerciseId: EntityId) => void;
 };
 
 /** Async loading states used by the workout history screen. */
@@ -204,6 +207,7 @@ export const WorkoutHistory = ({
   exerciseStore = exerciseRepository,
   settingsStore = settingsRepository,
   onSessionStarted,
+  onOpenExercise,
 }: WorkoutHistoryProps) => {
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -499,6 +503,7 @@ export const WorkoutHistory = ({
               settings={settings}
               messages={messages}
               onWeeklyTargetChange={updateWeeklyWorkoutTarget}
+              onOpenExercise={onOpenExercise}
             />
           </Tabs.Content>
 

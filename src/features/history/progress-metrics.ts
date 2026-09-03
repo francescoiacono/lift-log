@@ -1,6 +1,13 @@
-import type { EntityId, Exercise, IsoDateTime, WeightUnit, WorkoutSession, WorkoutSet } from "@/db";
+import type { EntityId, IsoDateTime, WeightUnit, WorkoutSession, WorkoutSet } from "@/db";
+import { convertWeight } from "@/features/exercises/exercise-insights";
+export { buildExerciseProgress, convertWeight } from "@/features/exercises/exercise-insights";
+export type {
+  ExerciseProgress,
+  ExerciseProgressKind,
+  ExerciseProgressPoint,
+  WeightedExerciseProgressKind,
+} from "@/features/exercises/exercise-insights";
 
-const poundsPerKilogram = 2.204_622_621_8;
 const millisecondsPerDay = 86_400_000;
 
 /** Options controlling the date window and filters for weekly progress summaries. */
@@ -51,53 +58,6 @@ export type PlanAdherence = {
   percent: number | null;
 };
 
-/** Metric used to describe progress for an exercise. */
-export type ExerciseProgressKind =
-  | "assistance"
-  | "duration"
-  | "estimatedStrength"
-  | "repetitions"
-  | "weight";
-
-/** Selectable metric for exercises that record an external weight. */
-export type WeightedExerciseProgressKind = "estimatedStrength" | "weight";
-
-/** One exercise's best performance inside a finished workout. */
-export type ExerciseProgressPoint = {
-  /** Session containing the performance. */
-  sessionId: EntityId;
-
-  /** Saved workout name associated with the performance. */
-  sessionName: string | null;
-
-  /** Session start timestamp used on the progress timeline. */
-  startedAt: IsoDateTime;
-
-  /** Comparable metric value for this session. */
-  value: number;
-
-  /** Whether this point improved on every earlier recorded session. */
-  isPersonalRecord: boolean;
-
-  /** Weight from the set that produced this point, when applicable. */
-  weight: number | null;
-
-  /** Repetition count from the set that produced this point, when applicable. */
-  reps: number | null;
-
-  /** Hold duration from the set that produced this point, when applicable. */
-  durationSeconds: number | null;
-};
-
-/** Comparable progress timeline for one exercise. */
-export type ExerciseProgress = {
-  /** Metric semantics used by every point. */
-  kind: ExerciseProgressKind;
-
-  /** Session-level performance points ordered from oldest to newest. */
-  points: ExerciseProgressPoint[];
-};
-
 /** Returns the local Monday at the start of the supplied date's calendar week. */
 const getLocalWeekStart = (date: Date): Date => {
   const weekStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -115,15 +75,6 @@ const addLocalDays = (date: Date, days: number): Date => {
   nextDate.setDate(nextDate.getDate() + days);
 
   return nextDate;
-};
-
-/** Converts a weight value between the units supported by Lift Log. */
-export const convertWeight = (weight: number, fromUnit: WeightUnit, toUnit: WeightUnit): number => {
-  if (fromUnit === toUnit) {
-    return weight;
-  }
-
-  return fromUnit === "kg" ? weight * poundsPerKilogram : weight / poundsPerKilogram;
 };
 
 /** Calculates completed volume for a set in the requested display unit. */
@@ -239,149 +190,4 @@ export const getDaysSinceLastWorkout = (
   ).getTime();
 
   return Math.round((todayStart - sessionDayStart) / millisecondsPerDay);
-};
-
-/** Estimates one-repetition maximum for a weighted set using the Epley formula. */
-const estimateOneRepMax = (set: WorkoutSet, weightUnit: WeightUnit): number => {
-  if (
-    set.weight === null ||
-    set.reps === null ||
-    set.weight <= 0 ||
-    set.reps <= 0 ||
-    set.reps > 30
-  ) {
-    return 0;
-  }
-
-  return convertWeight(set.weight, set.weightUnit, weightUnit) * (1 + set.reps / 30);
-};
-
-/** Selects the metric semantics that best match an exercise and its logged sets. */
-const getExerciseProgressKind = (
-  exercise: Exercise,
-  completedSets: WorkoutSet[],
-  weightedKind: WeightedExerciseProgressKind,
-): ExerciseProgressKind => {
-  if (exercise.trackingMode === "timed") {
-    return "duration";
-  }
-
-  if (exercise.trackingMode === "assisted") {
-    return "assistance";
-  }
-
-  return exercise.trackingMode === "weighted" &&
-    completedSets.some((set) => set.weight !== null && set.weight > 0)
-    ? weightedKind
-    : "repetitions";
-};
-
-/** Returns the set and comparable value that best represent one session. */
-const findSessionBest = (
-  sets: WorkoutSet[],
-  kind: ExerciseProgressKind,
-  weightUnit: WeightUnit,
-): { set: WorkoutSet; value: number } | undefined => {
-  const comparableSets = sets
-    .map((set) => {
-      if (kind === "duration") {
-        return { set, value: set.durationSeconds ?? 0 };
-      }
-
-      if (kind === "assistance") {
-        return {
-          set,
-          value:
-            set.weight === null || set.weight < 0
-              ? Number.POSITIVE_INFINITY
-              : convertWeight(set.weight, set.weightUnit, weightUnit),
-        };
-      }
-
-      if (kind === "estimatedStrength") {
-        return { set, value: estimateOneRepMax(set, weightUnit) };
-      }
-
-      if (kind === "weight") {
-        return {
-          set,
-          value: set.weight === null ? 0 : convertWeight(set.weight, set.weightUnit, weightUnit),
-        };
-      }
-
-      return { set, value: set.reps ?? 0 };
-    })
-    .filter(
-      ({ value }) => Number.isFinite(value) && (kind === "assistance" ? value >= 0 : value > 0),
-    )
-    .sort((first, second) => {
-      return kind === "assistance" ? first.value - second.value : second.value - first.value;
-    });
-
-  return comparableSets[0];
-};
-
-/** Builds a session-by-session progress timeline for one exercise. */
-export const buildExerciseProgress = (
-  exercise: Exercise,
-  sessions: WorkoutSession[],
-  weightUnit: WeightUnit = "kg",
-  weightedKind: WeightedExerciseProgressKind = "weight",
-): ExerciseProgress => {
-  const relevantSessions = sessions
-    .filter((session) => session.status === "finished")
-    .map((session) => ({
-      session,
-      sets: session.exercises
-        .filter((sessionExercise) => sessionExercise.exerciseId === exercise.id)
-        .flatMap((sessionExercise) => sessionExercise.sets)
-        .filter((set) => set.isCompleted),
-    }))
-    .filter(({ sets }) => sets.length > 0)
-    .sort(
-      (first, second) =>
-        new Date(first.session.startedAt).getTime() - new Date(second.session.startedAt).getTime(),
-    );
-  const kind = getExerciseProgressKind(
-    exercise,
-    relevantSessions.flatMap(({ sets }) => sets),
-    weightedKind,
-  );
-  let runningBest: number | undefined;
-  const points: ExerciseProgressPoint[] = [];
-
-  for (const { session, sets } of relevantSessions) {
-    const best = findSessionBest(sets, kind, weightUnit);
-
-    if (!best) {
-      continue;
-    }
-
-    const isImprovement =
-      runningBest !== undefined &&
-      (kind === "assistance" ? best.value < runningBest : best.value > runningBest);
-
-    if (
-      runningBest === undefined ||
-      (kind === "assistance" ? best.value < runningBest : best.value > runningBest)
-    ) {
-      runningBest = best.value;
-    }
-
-    points.push({
-      sessionId: session.id,
-      sessionName: session.name,
-      startedAt: session.startedAt,
-      value: best.value,
-      isPersonalRecord: isImprovement,
-      weight:
-        best.set.weight === null
-          ? null
-          : convertWeight(best.set.weight, best.set.weightUnit, weightUnit),
-      reps: best.set.reps,
-      durationSeconds: best.set.durationSeconds ?? null,
-    });
-  }
-
-  return { kind, points };
 };

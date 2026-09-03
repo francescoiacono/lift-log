@@ -1,34 +1,57 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
+  Activity,
   ArrowLeft,
+  CalendarDays,
+  ChartNoAxesCombined,
   Check,
-  CheckCircle2,
   CirclePlus,
-  Clock3,
   Dumbbell,
   MoreHorizontal,
+  NotebookText,
   Pencil,
   Plus,
   Star,
+  TrendingDown,
+  TrendingUp,
   Trash2,
   X,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
+import { ExerciseProgressChart } from "./exercise-progress-chart";
+import {
+  formatExerciseProgressValue,
+  getExerciseProgressMetricLabel,
+} from "./exercise-progress-formatters";
+import {
+  buildExerciseInsights,
+  filterExerciseProgressPoints,
+  type ExerciseProgressKind,
+  type ExerciseProgressRange,
+  type ExerciseWorkoutPerformance,
+  type WeightedExerciseProgressKind,
+} from "./exercise-insights";
 import { styles } from "./exercise-library.styles";
 import type {
+  AppSettings,
   EntityId,
   Exercise,
   ExerciseRepository,
   ExerciseTrackingMode,
+  SettingsRepository,
   WeightUnit,
   WorkoutSession,
-  WorkoutSessionExercise,
   WorkoutSessionRepository,
   WorkoutSet,
 } from "@/db";
-import { exerciseRepository, formatMuscleGroupLabel, workoutSessionRepository } from "@/db";
+import {
+  exerciseRepository,
+  formatMuscleGroupLabel,
+  settingsRepository,
+  workoutSessionRepository,
+} from "@/db";
 import type { Messages } from "@/i18n";
 
 /** Message dictionary used by the exercise library feature. */
@@ -48,11 +71,17 @@ export type ExerciseLibraryProps = {
   /** Repository used to read and prepare workout history for exercise details. */
   sessionRepository?: WorkoutSessionRepository;
 
+  /** Repository used to read the preferred weight unit and rest fallback. */
+  settingsStore?: SettingsRepository;
+
+  /** Selected exercise id when selection is controlled by the app shell. */
+  selectedExerciseId?: EntityId | null;
+
+  /** Called when the selected exercise detail changes. */
+  onSelectedExerciseChange?: (exerciseId: EntityId | null) => void;
+
   /** Called after the user wants to log this exercise in the active workout. */
   onOpenWorkout?: () => void;
-
-  /** Called when the user wants to inspect full workout history. */
-  onOpenHistory?: () => void;
 };
 
 /** Editable form state for create and edit exercise flows. */
@@ -75,20 +104,6 @@ type ExerciseFormState = {
 
 /** Async loading states used by the exercise library. */
 type LoadState = "loading" | "ready" | "error";
-
-/** Logged set with the containing workout session attached. */
-type ExerciseSetEntry = {
-  /** Persisted workout session that contains the set. */
-  session: WorkoutSession;
-
-  /** Exercise block within the persisted workout session. */
-  sessionExercise: WorkoutSessionExercise;
-
-  /** Logged set for the selected exercise. */
-  set: WorkoutSet;
-};
-
-const poundsPerKilogram = 2.204_622_621_8;
 
 /** Creates an empty exercise form state. */
 const createEmptyFormState = (): ExerciseFormState => {
@@ -141,31 +156,6 @@ const formatExerciseActionLabel = (template: string, exerciseName: string): stri
   return template.replace("{name}", exerciseName);
 };
 
-/** Formats a nullable weight value for detail metrics. */
-const formatWeight = (weight: number | null, unit = "kg"): string => {
-  if (weight === null) {
-    return "-";
-  }
-
-  return `${new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: 1,
-  }).format(weight)} ${unit}`;
-};
-
-/** Formats a set's repetition count for display. */
-const formatReps = (reps: number | null, messages: ExerciseLibraryMessages): string => {
-  return reps === null ? messages.noReps : messages.repsValue.replace("{count}", String(reps));
-};
-
-/** Formats a set's primary effort as either a hold duration or a rep count. */
-const formatSetEffort = (set: WorkoutSet, messages: ExerciseLibraryMessages): string => {
-  if (set.durationSeconds != null) {
-    return messages.durationValue.replace("{seconds}", String(set.durationSeconds));
-  }
-
-  return formatReps(set.reps, messages);
-};
-
 /** Formats seconds as a timer duration. */
 const formatTimerDuration = (seconds: number): string => {
   const minutes = Math.floor(seconds / 60);
@@ -174,7 +164,7 @@ const formatTimerDuration = (seconds: number): string => {
   return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
 };
 
-/** Formats a saved workout date for personal-best cards. */
+/** Formats a saved workout date for exercise performance cards. */
 const formatShortDate = (timestamp: string): string => {
   return new Intl.DateTimeFormat(undefined, {
     day: "numeric",
@@ -183,101 +173,95 @@ const formatShortDate = (timestamp: string): string => {
   }).format(new Date(timestamp));
 };
 
-/** Converts a logged weight into a consistent comparison or display unit. */
-const convertWeight = (weight: number, fromUnit: WeightUnit, toUnit: WeightUnit): number => {
-  if (fromUnit === toUnit) {
-    return weight;
+/** Formats a workout set using the selected exercise's tracking semantics. */
+const formatWorkoutSet = (
+  set: WorkoutSet,
+  trackingMode: ExerciseTrackingMode,
+  messages: ExerciseLibraryMessages,
+): string => {
+  if (trackingMode === "timed") {
+    return messages.workoutSetDuration.replace("{seconds}", String(set.durationSeconds ?? 0));
   }
 
-  return fromUnit === "kg" ? weight * poundsPerKilogram : weight / poundsPerKilogram;
-};
-
-/** Estimates one-rep max using the Epley formula in the requested unit. */
-const estimateOneRepMax = (set: WorkoutSet, weightUnit: WeightUnit = set.weightUnit): number => {
-  if (set.weight === null || set.reps === null || set.weight <= 0 || set.reps <= 0) {
-    return 0;
+  if (trackingMode === "bodyweight" || set.weight === null) {
+    return set.reps === null
+      ? messages.noReps
+      : messages.workoutSetReps.replace("{reps}", String(set.reps));
   }
 
-  return convertWeight(set.weight, set.weightUnit, weightUnit) * (1 + set.reps / 30);
+  const weight = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(set.weight);
+
+  return set.reps === null
+    ? `${weight} ${set.weightUnit}`
+    : messages.workoutSetWeightReps
+        .replace("{weight}", weight)
+        .replace("{unit}", set.weightUnit)
+        .replace("{reps}", String(set.reps));
 };
 
-/** Returns all sets logged for one exercise, newest first. */
-const getExerciseSetEntries = (
-  exerciseId: EntityId,
-  sessions: WorkoutSession[],
-): ExerciseSetEntry[] => {
-  return sessions
-    .flatMap((session) =>
-      session.exercises
-        .filter((sessionExercise) => sessionExercise.exerciseId === exerciseId)
-        .flatMap((sessionExercise) =>
-          sessionExercise.sets
-            .filter((set) => set.isCompleted)
-            .map((set) => ({
-              session,
-              sessionExercise,
-              set,
-            })),
-        ),
-    )
-    .sort((firstEntry, secondEntry) => {
-      const firstTimestamp = firstEntry.set.completedAt ?? firstEntry.session.startedAt;
-      const secondTimestamp = secondEntry.set.completedAt ?? secondEntry.session.startedAt;
+/** Formats the aggregate line for one workout's exercise performance. */
+const formatPerformanceSummary = (
+  performance: ExerciseWorkoutPerformance,
+  trackingMode: ExerciseTrackingMode,
+  weightUnit: WeightUnit,
+  messages: ExerciseLibraryMessages,
+): string => {
+  const setCount = performance.sets.length;
+  const setLabel = messages.performanceSetCount.replace("{count}", String(setCount));
 
-      return new Date(secondTimestamp).getTime() - new Date(firstTimestamp).getTime();
-    });
+  if (trackingMode === "weighted") {
+    const volume = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(
+      performance.volume,
+    );
+
+    return messages.performanceVolumeMeta
+      .replace("{sets}", setLabel)
+      .replace("{volume}", volume)
+      .replace("{unit}", weightUnit);
+  }
+
+  if (trackingMode === "timed") {
+    return messages.performanceDurationMeta
+      .replace("{sets}", setLabel)
+      .replace("{seconds}", String(performance.totalDurationSeconds));
+  }
+
+  return messages.performanceRepsMeta
+    .replace("{sets}", setLabel)
+    .replace("{reps}", String(performance.totalReps));
 };
 
-/** Calculates normalized total volume for a list of completed sets. */
-const calculateVolume = (entries: ExerciseSetEntry[], weightUnit: WeightUnit): number => {
-  return entries.reduce((volume, entry) => {
-    const weight =
-      entry.set.weight === null
-        ? 0
-        : convertWeight(entry.set.weight, entry.set.weightUnit, weightUnit);
-
-    return volume + weight * (entry.set.reps ?? 0);
-  }, 0);
+/** Formats every note attached to a saved exercise performance. */
+const formatPerformanceNotes = (
+  performance: ExerciseWorkoutPerformance,
+  messages: ExerciseLibraryMessages,
+): string => {
+  return [
+    performance.exerciseNotes
+      ? messages.exercisePerformanceNote.replace("{note}", performance.exerciseNotes)
+      : null,
+    performance.sessionNotes
+      ? messages.workoutPerformanceNote.replace("{note}", performance.sessionNotes)
+      : null,
+  ]
+    .filter((note): note is string => note !== null)
+    .join(" · ");
 };
 
-/** Finds the best set using the selected exercise's progress semantics. */
-const findBestSetEntry = (
-  entries: ExerciseSetEntry[],
-  exercise: Exercise | undefined,
-): ExerciseSetEntry | undefined => {
-  return [...entries].sort((firstEntry, secondEntry) => {
-    if (exercise?.trackingMode === "timed") {
-      return (secondEntry.set.durationSeconds ?? 0) - (firstEntry.set.durationSeconds ?? 0);
-    }
+/** Formats a signed latest-versus-previous progress change. */
+const formatProgressChange = (
+  change: number | null,
+  kind: ExerciseProgressKind,
+  weightUnit: WeightUnit,
+  messages: ExerciseLibraryMessages,
+): string => {
+  if (change === null) {
+    return messages.noComparison;
+  }
 
-    if (exercise?.trackingMode === "assisted") {
-      const firstWeight =
-        firstEntry.set.weight === null
-          ? Number.POSITIVE_INFINITY
-          : convertWeight(firstEntry.set.weight, firstEntry.set.weightUnit, "kg");
-      const secondWeight =
-        secondEntry.set.weight === null
-          ? Number.POSITIVE_INFINITY
-          : convertWeight(secondEntry.set.weight, secondEntry.set.weightUnit, "kg");
+  const sign = change > 0 ? "+" : "";
 
-      return firstWeight - secondWeight;
-    }
-
-    if (exercise?.trackingMode === "bodyweight") {
-      return (secondEntry.set.reps ?? 0) - (firstEntry.set.reps ?? 0);
-    }
-
-    return estimateOneRepMax(secondEntry.set, "kg") - estimateOneRepMax(firstEntry.set, "kg");
-  })[0];
-};
-
-/** Finds a useful default rest duration from recent logged sets. */
-const getDefaultRestSeconds = (entries: ExerciseSetEntry[]): number => {
-  const entryWithRest = entries.find(
-    (entry) => entry.set.restSeconds !== null || entry.sessionExercise.restSeconds !== null,
-  );
-
-  return entryWithRest?.set.restSeconds ?? entryWithRest?.sessionExercise.restSeconds ?? 150;
+  return `${sign}${formatExerciseProgressValue(change, kind, weightUnit, messages)}`;
 };
 
 /** Root exercise library feature with create, edit, list, and delete flows. */
@@ -286,60 +270,85 @@ export const ExerciseLibrary = ({
   isActive = true,
   repository = exerciseRepository,
   sessionRepository = workoutSessionRepository,
+  settingsStore = settingsRepository,
+  selectedExerciseId: controlledSelectedExerciseId,
+  onSelectedExerciseChange,
   onOpenWorkout,
-  onOpenHistory,
 }: ExerciseLibraryProps) => {
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [finishedSessions, setFinishedSessions] = useState<WorkoutSession[]>([]);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [formState, setFormState] = useState<ExerciseFormState>(createEmptyFormState);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingExerciseId, setEditingExerciseId] = useState<EntityId | null>(null);
-  const [selectedExerciseId, setSelectedExerciseId] = useState<EntityId | null>(null);
+  const [internalSelectedExerciseId, setInternalSelectedExerciseId] = useState<EntityId | null>(
+    null,
+  );
+  const [weightedProgressKind, setWeightedProgressKind] =
+    useState<WeightedExerciseProgressKind>("estimatedStrength");
+  const [progressRange, setProgressRange] = useState<ExerciseProgressRange>("all");
+  const [isFullPerformanceHistoryOpen, setIsFullPerformanceHistoryOpen] = useState(false);
   const [isPreparingWorkout, setIsPreparingWorkout] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<EntityId | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
 
+  const selectedExerciseId =
+    controlledSelectedExerciseId === undefined
+      ? internalSelectedExerciseId
+      : controlledSelectedExerciseId;
   const editingExercise = useMemo(() => {
     return exercises.find((exercise) => exercise.id === editingExerciseId);
   }, [editingExerciseId, exercises]);
   const selectedExercise = useMemo(() => {
     return exercises.find((exercise) => exercise.id === selectedExerciseId);
   }, [exercises, selectedExerciseId]);
-  const selectedSetEntries = useMemo(() => {
-    return selectedExercise ? getExerciseSetEntries(selectedExercise.id, finishedSessions) : [];
-  }, [finishedSessions, selectedExercise]);
+  const selectedExerciseInsights = useMemo(() => {
+    return selectedExercise && settings
+      ? buildExerciseInsights(
+          selectedExercise,
+          finishedSessions,
+          settings.weightUnit,
+          weightedProgressKind,
+        )
+      : null;
+  }, [finishedSessions, selectedExercise, settings, weightedProgressKind]);
 
   const isEditing = editingExerciseId !== null;
   const canSubmit = formState.name.trim().length > 0;
   const formFeedbackMessage = isFormOpen ? feedbackMessage : null;
   const pageFeedbackMessage = isFormOpen ? null : feedbackMessage;
-  const latestSetEntry = selectedSetEntries[0];
-  const bestSetEntry = findBestSetEntry(selectedSetEntries, selectedExercise);
-  const volumeWeightUnit = latestSetEntry?.set.weightUnit ?? "kg";
-  const estimatedOneRepMax =
-    bestSetEntry && selectedExercise?.trackingMode === "weighted"
-      ? estimateOneRepMax(bestSetEntry.set)
-      : 0;
-  const totalVolume = calculateVolume(selectedSetEntries, volumeWeightUnit);
-  const defaultRestSeconds = getDefaultRestSeconds(selectedSetEntries);
+  const visibleProgressPoints = useMemo(() => {
+    return filterExerciseProgressPoints(
+      selectedExerciseInsights?.progress.points ?? [],
+      progressRange,
+    );
+  }, [progressRange, selectedExerciseInsights]);
+
+  /** Updates local and app-controlled exercise selection together. */
+  const updateSelectedExercise = (exerciseId: EntityId | null) => {
+    setInternalSelectedExerciseId(exerciseId);
+    onSelectedExerciseChange?.(exerciseId);
+  };
 
   /** Refreshes the local exercise list from IndexedDB. */
   const refreshData = useCallback(async () => {
     try {
-      const [nextExercises, nextFinishedSessions] = await Promise.all([
+      const [nextExercises, nextFinishedSessions, nextSettings] = await Promise.all([
         repository.list(),
         sessionRepository.listFinished(),
+        settingsStore.get(),
       ]);
 
       setExercises(nextExercises);
       setFinishedSessions(nextFinishedSessions);
+      setSettings(nextSettings);
       setLoadState("ready");
     } catch {
       setLoadState("error");
       setFeedbackMessage(messages.loadError);
     }
-  }, [messages.loadError, repository, sessionRepository]);
+  }, [messages.loadError, repository, sessionRepository, settingsStore]);
 
   useEffect(() => {
     if (isActive) {
@@ -354,7 +363,8 @@ export const ExerciseLibrary = ({
 
     setFormState(createEmptyFormState());
     setEditingExerciseId(null);
-    setSelectedExerciseId(null);
+    setInternalSelectedExerciseId(null);
+    setIsFullPerformanceHistoryOpen(false);
     setIsPreparingWorkout(false);
     setPendingDeleteId(null);
     setFeedbackMessage(null);
@@ -446,9 +456,9 @@ export const ExerciseLibrary = ({
   const confirmDelete = async (exerciseId: EntityId) => {
     try {
       await repository.deleteById(exerciseId);
-      setSelectedExerciseId((currentExerciseId) =>
-        currentExerciseId === exerciseId ? null : currentExerciseId,
-      );
+      if (selectedExerciseId === exerciseId) {
+        updateSelectedExercise(null);
+      }
       setPendingDeleteId(null);
       await refreshData();
     } catch {
@@ -459,7 +469,10 @@ export const ExerciseLibrary = ({
   /** Opens the full exercise detail page. */
   const openDetail = (exercise: Exercise) => {
     setFeedbackMessage(null);
-    setSelectedExerciseId(exercise.id);
+    setWeightedProgressKind("estimatedStrength");
+    setProgressRange("all");
+    setIsFullPerformanceHistoryOpen(false);
+    updateSelectedExercise(exercise.id);
   };
 
   /** Prepares the selected exercise in the active workout and opens the workout screen. */
@@ -501,7 +514,19 @@ export const ExerciseLibrary = ({
   };
 
   if (selectedExercise) {
-    const recentSetEntries = selectedSetEntries.slice(0, 5);
+    const latestPerformance = selectedExerciseInsights?.performances[0];
+    const allEarlierPerformances = selectedExerciseInsights?.performances.slice(1) ?? [];
+    const earlierPerformances = isFullPerformanceHistoryOpen
+      ? allEarlierPerformances
+      : allEarlierPerformances.slice(0, 5);
+    const progressKind = selectedExerciseInsights?.progress.kind ?? "repetitions";
+    const latestRestSeconds = latestPerformance
+      ? ([...latestPerformance.sets].reverse().find((set) => set.restSeconds !== null)
+          ?.restSeconds ??
+        latestPerformance.restSeconds ??
+        settings?.defaultRestSeconds ??
+        120)
+      : (settings?.defaultRestSeconds ?? 120);
 
     return (
       <section className={styles.detailRoot} aria-labelledby="exercise-detail-title">
@@ -509,7 +534,7 @@ export const ExerciseLibrary = ({
           <button
             className={styles.iconButton({ variant: "ghost" })}
             type="button"
-            onClick={() => setSelectedExerciseId(null)}
+            onClick={() => updateSelectedExercise(null)}
           >
             <ArrowLeft className={styles.icon} aria-hidden="true" />
             <span className={styles.visuallyHidden}>{messages.backAction}</span>
@@ -560,149 +585,278 @@ export const ExerciseLibrary = ({
           </div>
         </div>
 
-        <section className={styles.detailSection} aria-labelledby="previous-performance-title">
+        <div className={styles.performanceCard} aria-label={messages.exerciseSummaryLabel}>
+          <div className={styles.performanceMetric}>
+            <CalendarDays className={styles.summaryMetricIcon} aria-hidden="true" />
+            <strong className={styles.performanceValue}>
+              {latestPerformance ? formatShortDate(latestPerformance.startedAt) : "-"}
+            </strong>
+            <span className={styles.performanceLabel}>{messages.lastTrainedLabel}</span>
+          </div>
+          <div className={styles.performanceMetric}>
+            <Activity className={styles.summaryMetricIcon} aria-hidden="true" />
+            <strong className={styles.performanceValue}>
+              {selectedExerciseInsights?.workoutCount ?? 0}
+            </strong>
+            <span className={styles.performanceLabel}>{messages.workoutsLoggedLabel}</span>
+          </div>
+          <div className={styles.performanceMetric}>
+            <Dumbbell className={styles.summaryMetricIcon} aria-hidden="true" />
+            <strong className={styles.performanceValue}>
+              {selectedExerciseInsights?.completedSetCount ?? 0}
+            </strong>
+            <span className={styles.performanceLabel}>{messages.completedSetsLabel}</span>
+          </div>
+        </div>
+
+        {selectedExercise.notes ? (
+          <aside className={styles.exerciseNotes}>
+            <NotebookText className={styles.exerciseNotesIcon} aria-hidden="true" />
+            <div>
+              <strong>{messages.exerciseNotesTitle}</strong>
+              <p>{selectedExercise.notes}</p>
+            </div>
+          </aside>
+        ) : null}
+
+        <section className={styles.detailSection} aria-labelledby="last-performance-title">
+          <h2 className={styles.detailSectionTitle} id="last-performance-title">
+            {messages.lastPerformanceTitle}
+          </h2>
+          {latestPerformance ? (
+            <article className={styles.workoutPerformanceCard}>
+              <div className={styles.workoutPerformanceHeader}>
+                <div>
+                  <strong>{latestPerformance.sessionName ?? messages.noWorkoutName}</strong>
+                  <span>{formatShortDate(latestPerformance.startedAt)}</span>
+                </div>
+                <span className={styles.restBadge}>
+                  {messages.restTargetValue.replace(
+                    "{duration}",
+                    formatTimerDuration(latestRestSeconds),
+                  )}
+                </span>
+              </div>
+              <p className={styles.workoutPerformanceMeta}>
+                {formatPerformanceSummary(
+                  latestPerformance,
+                  selectedExercise.trackingMode,
+                  settings?.weightUnit ?? "kg",
+                  messages,
+                )}
+              </p>
+              <ol className={styles.performanceSetList}>
+                {latestPerformance.sets.map((set) => (
+                  <li className={styles.performanceSetRow} key={set.id}>
+                    <span className={styles.performanceSetNumber}>{set.order + 1}</span>
+                    <span>
+                      <strong>
+                        {formatWorkoutSet(set, selectedExercise.trackingMode, messages)}
+                      </strong>
+                      {set.notes ? <small>{set.notes}</small> : null}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              {latestPerformance.exerciseNotes || latestPerformance.sessionNotes ? (
+                <div className={styles.performanceNotes}>
+                  <NotebookText aria-hidden="true" />
+                  <span>{formatPerformanceNotes(latestPerformance, messages)}</span>
+                </div>
+              ) : null}
+            </article>
+          ) : (
+            <p className={styles.detailEmpty}>{messages.lastPerformanceEmpty}</p>
+          )}
+        </section>
+
+        <section className={styles.detailSection} aria-labelledby="exercise-progress-title">
           <div className={styles.detailSectionHeader}>
-            <h2 className={styles.detailSectionTitle} id="previous-performance-title">
-              {messages.previousPerformanceTitle}
-            </h2>
-            {onOpenHistory ? (
-              <button className={styles.detailTextButton} type="button" onClick={onOpenHistory}>
-                {messages.viewAllAction}
+            <div>
+              <h2 className={styles.detailSectionTitle} id="exercise-progress-title">
+                {messages.progressTitle}
+              </h2>
+              <p className={styles.detailSectionDescription}>{messages.progressDescription}</p>
+            </div>
+            <ChartNoAxesCombined className={styles.detailSectionIcon} aria-hidden="true" />
+          </div>
+          {selectedExerciseInsights && selectedExerciseInsights.progress.points.length > 0 ? (
+            <div className={styles.progressCard}>
+              <div className={styles.progressControls}>
+                {selectedExercise.trackingMode === "weighted" ? (
+                  <label className={styles.progressField}>
+                    <span>{messages.progressMetricLabel}</span>
+                    <select
+                      value={weightedProgressKind}
+                      onChange={(event) =>
+                        setWeightedProgressKind(
+                          event.currentTarget.value as WeightedExerciseProgressKind,
+                        )
+                      }
+                    >
+                      <option value="estimatedStrength">
+                        {messages.estimatedStrengthProgressLabel}
+                      </option>
+                      <option value="weight">{messages.weightProgressLabel}</option>
+                    </select>
+                  </label>
+                ) : (
+                  <span className={styles.progressMetricName}>
+                    {getExerciseProgressMetricLabel(progressKind, messages)}
+                  </span>
+                )}
+                <label className={styles.progressField}>
+                  <span>{messages.progressRangeLabel}</span>
+                  <select
+                    value={progressRange}
+                    onChange={(event) =>
+                      setProgressRange(event.currentTarget.value as ExerciseProgressRange)
+                    }
+                  >
+                    <option value="oneMonth">{messages.progressRangeOneMonth}</option>
+                    <option value="threeMonths">{messages.progressRangeThreeMonths}</option>
+                    <option value="all">{messages.progressRangeAll}</option>
+                  </select>
+                </label>
+              </div>
+              <div className={styles.progressStats}>
+                <div>
+                  <span>{messages.latestPerformanceLabel}</span>
+                  <strong>
+                    {selectedExerciseInsights.latestPoint
+                      ? formatExerciseProgressValue(
+                          selectedExerciseInsights.latestPoint.value,
+                          progressKind,
+                          settings?.weightUnit ?? "kg",
+                          messages,
+                        )
+                      : "-"}
+                  </strong>
+                </div>
+                <div>
+                  <span>{messages.changeFromPreviousLabel}</span>
+                  <strong
+                    className={styles.progressChange({
+                      trend:
+                        selectedExerciseInsights.isImprovement === null
+                          ? "neutral"
+                          : selectedExerciseInsights.isImprovement
+                            ? "positive"
+                            : "negative",
+                    })}
+                  >
+                    {selectedExerciseInsights.isImprovement === true ? (
+                      <TrendingUp aria-hidden="true" />
+                    ) : selectedExerciseInsights.isImprovement === false ? (
+                      <TrendingDown aria-hidden="true" />
+                    ) : null}
+                    {formatProgressChange(
+                      selectedExerciseInsights.changeFromPrevious,
+                      progressKind,
+                      settings?.weightUnit ?? "kg",
+                      messages,
+                    )}
+                  </strong>
+                </div>
+                <div>
+                  <span>{messages.bestPerformanceLabel}</span>
+                  <strong>
+                    {selectedExerciseInsights.bestPoint
+                      ? formatExerciseProgressValue(
+                          selectedExerciseInsights.bestPoint.value,
+                          progressKind,
+                          settings?.weightUnit ?? "kg",
+                          messages,
+                        )
+                      : "-"}
+                  </strong>
+                  {selectedExerciseInsights.bestPoint ? (
+                    <small>{formatShortDate(selectedExerciseInsights.bestPoint.startedAt)}</small>
+                  ) : null}
+                </div>
+              </div>
+              {visibleProgressPoints.length > 0 ? (
+                <ExerciseProgressChart
+                  key={progressKind + "-" + progressRange}
+                  points={visibleProgressPoints}
+                  kind={progressKind}
+                  weightUnit={settings?.weightUnit ?? "kg"}
+                  exerciseName={selectedExercise.name}
+                  messages={messages}
+                />
+              ) : (
+                <p className={styles.progressRangeEmpty}>{messages.noProgressInRange}</p>
+              )}
+              {selectedExerciseInsights.progress.points.some((point) => point.isPersonalRecord) ? (
+                <span className={styles.prLegend}>
+                  <Star aria-hidden="true" />
+                  {messages.personalRecordMarker}
+                </span>
+              ) : null}
+            </div>
+          ) : (
+            <p className={styles.detailEmpty}>{messages.noExerciseProgress}</p>
+          )}
+        </section>
+
+        <section className={styles.detailSection} aria-labelledby="earlier-performances-title">
+          <div className={styles.detailSectionHeader}>
+            <div>
+              <h2 className={styles.detailSectionTitle} id="earlier-performances-title">
+                {messages.earlierPerformancesTitle}
+              </h2>
+              <p className={styles.detailSectionDescription}>
+                {messages.earlierPerformancesDescription}
+              </p>
+            </div>
+            {allEarlierPerformances.length > 5 ? (
+              <button
+                className={styles.detailTextButton}
+                type="button"
+                aria-expanded={isFullPerformanceHistoryOpen}
+                onClick={() => setIsFullPerformanceHistoryOpen((isOpen) => !isOpen)}
+              >
+                {isFullPerformanceHistoryOpen ? messages.showRecentAction : messages.viewAllAction}
               </button>
             ) : null}
           </div>
-          <div className={styles.performanceCard}>
-            <div className={styles.performanceMetric}>
-              <span className={styles.performanceLabel}>{messages.lastMetricLabel}</span>
-              <strong className={styles.performanceValue}>
-                {latestSetEntry
-                  ? selectedExercise.trackingMode === "timed" ||
-                    selectedExercise.trackingMode === "bodyweight"
-                    ? formatSetEffort(latestSetEntry.set, messages)
-                    : formatWeight(latestSetEntry.set.weight, latestSetEntry.set.weightUnit)
-                  : "-"}
-              </strong>
-              <span className={styles.performanceMeta}>
-                {latestSetEntry
-                  ? selectedExercise.trackingMode === "timed"
-                    ? latestSetEntry.set.weight === null
-                      ? messages.trackingModeTimed
-                      : formatWeight(latestSetEntry.set.weight, latestSetEntry.set.weightUnit)
-                    : selectedExercise.trackingMode === "bodyweight"
-                      ? messages.bodyweightMetricHint
-                      : formatSetEffort(latestSetEntry.set, messages)
-                  : messages.noSets}
-              </span>
-            </div>
-            <div className={styles.performanceMetric}>
-              <span className={styles.performanceLabel}>{messages.volumeMetricLabel}</span>
-              <strong className={styles.performanceValue}>
-                {selectedExercise.trackingMode === "weighted" && selectedSetEntries.length > 0
-                  ? formatWeight(totalVolume, volumeWeightUnit)
-                  : "-"}
-              </strong>
-              <span className={styles.performanceMeta}>{messages.totalMetricLabel}</span>
-            </div>
-            <div className={styles.performanceMetric}>
-              <span className={styles.performanceLabel}>
-                {selectedExercise.trackingMode === "timed"
-                  ? messages.durationMetricLabel
-                  : selectedExercise.trackingMode === "assisted"
-                    ? messages.assistanceMetricLabel
-                    : selectedExercise.trackingMode === "bodyweight"
-                      ? messages.repetitionsMetricLabel
-                      : messages.oneRepMaxMetricLabel}
-              </span>
-              <strong className={styles.performanceValue}>
-                {selectedExercise.trackingMode === "timed" && bestSetEntry
-                  ? formatSetEffort(bestSetEntry.set, messages)
-                  : selectedExercise.trackingMode === "assisted" && bestSetEntry
-                    ? formatWeight(bestSetEntry.set.weight, bestSetEntry.set.weightUnit)
-                    : selectedExercise.trackingMode === "bodyweight" && bestSetEntry
-                      ? formatSetEffort(bestSetEntry.set, messages)
-                      : estimatedOneRepMax > 0
-                        ? formatWeight(estimatedOneRepMax, bestSetEntry?.set.weightUnit ?? "kg")
-                        : "-"}
-              </strong>
-              <span className={styles.performanceMeta}>
-                {selectedExercise.trackingMode === "timed"
-                  ? messages.durationMetricHint
-                  : selectedExercise.trackingMode === "assisted"
-                    ? messages.assistanceMetricHint
-                    : selectedExercise.trackingMode === "bodyweight"
-                      ? messages.bodyweightMetricHint
-                      : messages.oneRepMaxFormulaLabel}
-              </span>
-            </div>
-          </div>
-        </section>
-
-        <section className={styles.detailSection} aria-labelledby="recent-sets-title">
-          <h2 className={styles.detailSectionTitle} id="recent-sets-title">
-            {messages.recentSetsTitle}
-          </h2>
-          {recentSetEntries.length > 0 ? (
-            <ol className={styles.recentSetList}>
-              {recentSetEntries.map((entry, index) => (
-                <li className={styles.recentSetRow} key={`${entry.session.id}-${entry.set.id}`}>
-                  <CheckCircle2 className={styles.recentSetIcon} aria-hidden="true" />
-                  <span className={styles.recentSetNumber}>{index + 1}</span>
-                  <span className={styles.recentSetWeight}>
-                    {formatWeight(entry.set.weight, entry.set.weightUnit)}
-                  </span>
-                  <span className={styles.recentSetReps}>
-                    {formatSetEffort(entry.set, messages)}
-                  </span>
+          {earlierPerformances.length > 0 ? (
+            <ol className={styles.performanceHistoryList}>
+              {earlierPerformances.map((performance) => (
+                <li className={styles.performanceHistoryCard} key={performance.sessionId}>
+                  <div className={styles.performanceHistoryHeader}>
+                    <div>
+                      <strong>{performance.sessionName ?? messages.noWorkoutName}</strong>
+                      <span>{formatShortDate(performance.startedAt)}</span>
+                    </div>
+                    <span>
+                      {formatPerformanceSummary(
+                        performance,
+                        selectedExercise.trackingMode,
+                        settings?.weightUnit ?? "kg",
+                        messages,
+                      )}
+                    </span>
+                  </div>
+                  <div className={styles.performanceHistorySets}>
+                    {performance.sets.map((set) => (
+                      <span key={set.id}>
+                        {formatWorkoutSet(set, selectedExercise.trackingMode, messages)}
+                      </span>
+                    ))}
+                  </div>
+                  {performance.exerciseNotes || performance.sessionNotes ? (
+                    <p className={styles.performanceHistoryNotes}>
+                      {formatPerformanceNotes(performance, messages)}
+                    </p>
+                  ) : null}
                 </li>
               ))}
             </ol>
           ) : (
-            <p className={styles.detailEmpty}>{messages.noRecentSets}</p>
+            <p className={styles.detailEmpty}>{messages.noEarlierPerformances}</p>
           )}
         </section>
-
-        <div className={styles.detailCards}>
-          <article className={styles.detailInfoCard}>
-            <div className={styles.detailInfoHeader}>
-              <span className={styles.detailInfoLabel}>{messages.personalBestTitle}</span>
-              <Star className={styles.detailInfoIcon} aria-hidden="true" />
-            </div>
-            <strong className={styles.detailInfoValue}>
-              {bestSetEntry
-                ? selectedExercise.trackingMode === "timed" ||
-                  selectedExercise.trackingMode === "bodyweight"
-                  ? formatSetEffort(bestSetEntry.set, messages)
-                  : formatWeight(bestSetEntry.set.weight, bestSetEntry.set.weightUnit)
-                : "-"}
-            </strong>
-            <span className={styles.detailInfoMeta}>
-              {bestSetEntry
-                ? selectedExercise.trackingMode === "timed"
-                  ? bestSetEntry.set.weight === null
-                    ? messages.trackingModeTimed
-                    : formatWeight(bestSetEntry.set.weight, bestSetEntry.set.weightUnit)
-                  : selectedExercise.trackingMode === "bodyweight"
-                    ? messages.bodyweightMetricHint
-                    : formatSetEffort(bestSetEntry.set, messages)
-                : messages.noSets}
-            </span>
-            <span className={styles.detailInfoDate}>
-              {bestSetEntry
-                ? formatShortDate(bestSetEntry.set.completedAt ?? bestSetEntry.session.startedAt)
-                : messages.noPerformanceDate}
-            </span>
-          </article>
-          <article className={styles.detailInfoCard}>
-            <div className={styles.detailInfoHeader}>
-              <span className={styles.detailInfoLabel}>{messages.defaultRestTitle}</span>
-              <Clock3 className={styles.detailInfoIconMuted} aria-hidden="true" />
-            </div>
-            <strong className={styles.detailInfoValue}>
-              {formatTimerDuration(defaultRestSeconds)}
-            </strong>
-            <span className={styles.detailInfoMeta}>{messages.timerUnitLabel}</span>
-          </article>
-        </div>
 
         <button
           className={styles.detailLogButton}

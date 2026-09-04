@@ -47,6 +47,7 @@ const exercise = {
   muscleGroups: ["chest", "triceps"],
   equipment: "barbell",
   trackingMode: "weighted",
+  confidenceRating: null,
   notes: null,
   createdAt: timestamp,
   updatedAt: timestamp,
@@ -351,6 +352,63 @@ describe("createLiftLogDatabase", () => {
     await expect(migratedDatabase.exercises.get(exercise.id)).resolves.toMatchObject({
       muscleGroups: ["shoulders", "triceps"],
       trackingMode: "assisted",
+    });
+  });
+
+  it("adds empty effort ratings to workout sets from schema version 4", async () => {
+    const legacyName = createTestDatabaseName();
+    const legacyDatabase = new Dexie(legacyName);
+
+    databaseNames.add(legacyName);
+    legacyDatabase.version(4).stores({
+      exercises: "id, name, *muscleGroups, equipment, createdAt, updatedAt",
+      workoutTemplates: "id, name, createdAt, updatedAt",
+      workoutSessions: "id, status, templateId, startedAt, finishedAt, updatedAt",
+      settings: "id, updatedAt",
+      activeWorkout: "id, sessionId, updatedAt",
+    });
+
+    await legacyDatabase.open();
+    await legacyDatabase.table("workoutSessions").add(workoutSession);
+    legacyDatabase.close();
+
+    const migratedDatabase = createTestDatabase(legacyName);
+
+    await migratedDatabase.open();
+
+    await expect(migratedDatabase.workoutSessions.get(workoutSession.id)).resolves.toMatchObject({
+      exercises: [
+        {
+          sets: [{ id: "set-1", effortRating: null }],
+        },
+      ],
+    });
+  });
+
+  it("adds empty confidence ratings to exercises from schema version 5", async () => {
+    const legacyName = createTestDatabaseName();
+    const legacyDatabase = new Dexie(legacyName);
+
+    databaseNames.add(legacyName);
+    legacyDatabase.version(5).stores({
+      exercises: "id, name, *muscleGroups, equipment, createdAt, updatedAt",
+      workoutTemplates: "id, name, createdAt, updatedAt",
+      workoutSessions: "id, status, templateId, startedAt, finishedAt, updatedAt",
+      settings: "id, updatedAt",
+      activeWorkout: "id, sessionId, updatedAt",
+    });
+
+    await legacyDatabase.open();
+    const { confidenceRating: _confidenceRating, ...legacyExercise } = exercise;
+    await legacyDatabase.table("exercises").add(legacyExercise);
+    legacyDatabase.close();
+
+    const migratedDatabase = createTestDatabase(legacyName);
+
+    await migratedDatabase.open();
+
+    await expect(migratedDatabase.exercises.get(exercise.id)).resolves.toMatchObject({
+      confidenceRating: null,
     });
   });
 });

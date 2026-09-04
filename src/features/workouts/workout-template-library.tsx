@@ -511,6 +511,12 @@ export const WorkoutTemplateLibrary = ({
                               <span className={styles.exerciseName}>{exercise.name}</span>
                               <span className={styles.exerciseMeta}>
                                 {exercise.equipment ?? messages.noEquipment}
+                                {exercise.confidenceRating
+                                  ? ` · ${messages.exerciseConfidence.replace(
+                                      "{rating}",
+                                      String(exercise.confidenceRating),
+                                    )}`
+                                  : null}
                               </span>
                             </span>
                           </label>

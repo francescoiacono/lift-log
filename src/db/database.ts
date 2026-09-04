@@ -13,7 +13,7 @@ import type {
 export const databaseName = "lift-log";
 
 /** Current Dexie schema version for the app database. */
-export const databaseVersion = 4;
+export const databaseVersion = 6;
 
 /** Singleton settings record id. */
 export const appSettingsId = "app" satisfies AppSettings["id"];
@@ -38,6 +38,12 @@ const schemaV3 = schemaV2;
 
 /** Dexie store definitions for the fourth schema version. */
 const schemaV4 = schemaV3;
+
+/** Dexie store definitions for the fifth schema version. */
+const schemaV5 = schemaV4;
+
+/** Dexie store definitions for the sixth schema version. */
+const schemaV6 = schemaV5;
 
 /** Typed Dexie database containing all local-first app stores. */
 export type LiftLogDatabase = Dexie & {
@@ -98,6 +104,22 @@ const migrateExerciseSemantics = (exercise: LegacyExerciseRecord): void => {
   delete exercise.tracksDuration;
 };
 
+/** Adds optional perceived-effort ratings to sets created before schema version 5. */
+const migrateWorkoutSetEffort = (workoutSession: WorkoutSession): void => {
+  workoutSession.exercises = workoutSession.exercises.map((exercise) => ({
+    ...exercise,
+    sets: exercise.sets.map((set) => ({
+      ...set,
+      effortRating: set.effortRating ?? null,
+    })),
+  }));
+};
+
+/** Adds optional confidence ratings to exercises created before schema version 6. */
+const migrateExerciseConfidence = (exercise: Exercise): void => {
+  exercise.confidenceRating ??= null;
+};
+
 /** Creates a typed Dexie database instance with the current schema applied. */
 export const createLiftLogDatabase = (name = databaseName): LiftLogDatabase => {
   const database = new Dexie(name) as LiftLogDatabase;
@@ -135,6 +157,24 @@ export const createLiftLogDatabase = (name = databaseName): LiftLogDatabase => {
         .table("exercises")
         .toCollection()
         .modify((exercise) => migrateExerciseSemantics(exercise));
+    });
+  database
+    .version(5)
+    .stores(schemaV5)
+    .upgrade(async (transaction) => {
+      await transaction
+        .table("workoutSessions")
+        .toCollection()
+        .modify((workoutSession) => migrateWorkoutSetEffort(workoutSession));
+    });
+  database
+    .version(6)
+    .stores(schemaV6)
+    .upgrade(async (transaction) => {
+      await transaction
+        .table("exercises")
+        .toCollection()
+        .modify((exercise) => migrateExerciseConfidence(exercise));
     });
 
   return database;

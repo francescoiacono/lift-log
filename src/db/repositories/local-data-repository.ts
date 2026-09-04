@@ -4,7 +4,9 @@ import type {
   ActiveWorkout,
   AppSettings,
   Exercise,
+  ExerciseConfidenceRating,
   IsoDateTime,
+  SetEffortRating,
   WorkoutSession,
   WorkoutTemplate,
 } from "../entities";
@@ -54,15 +56,23 @@ const localDataExportStoreKeys = [
 const minimumCompatibleDatabaseVersion = 2;
 
 /** Exercise shape accepted from exports that predate canonical tracking modes. */
-type CompatibleImportedExercise = Omit<Exercise, "trackingMode"> & {
+type CompatibleImportedExercise = Omit<Exercise, "confidenceRating" | "trackingMode"> & {
   /** Canonical mode when supplied by a current export. */
   trackingMode?: unknown;
+
+  /** Confidence rating when supplied by a current export. */
+  confidenceRating?: unknown;
 
   /** Older timed-exercise flag. */
   tracksDuration?: boolean;
 
   /** Older assisted-exercise flag. */
   tracksAssistance?: boolean;
+};
+
+/** Normalizes an untrusted exercise-confidence value into the supported five-point scale. */
+const normalizeExerciseConfidenceRating = (value: unknown): ExerciseConfidenceRating | null => {
+  return value === 1 || value === 2 || value === 3 || value === 4 || value === 5 ? value : null;
 };
 
 /** Normalizes an imported exercise into the current persistence model. */
@@ -77,7 +87,27 @@ const normalizeImportedExercise = (exercise: Exercise): Exercise => {
       tracksAssistance,
       tracksDuration,
     }),
+    confidenceRating: normalizeExerciseConfidenceRating(compatibleExercise.confidenceRating),
   } as Exercise;
+};
+
+/** Normalizes an untrusted perceived-effort value into the supported five-point scale. */
+const normalizeSetEffortRating = (value: unknown): SetEffortRating | null => {
+  return value === 1 || value === 2 || value === 3 || value === 4 || value === 5 ? value : null;
+};
+
+/** Normalizes imported workout sets that predate perceived-effort tracking. */
+const normalizeImportedWorkoutSession = (workoutSession: WorkoutSession): WorkoutSession => {
+  return {
+    ...workoutSession,
+    exercises: workoutSession.exercises.map((exercise) => ({
+      ...exercise,
+      sets: exercise.sets.map((set) => ({
+        ...set,
+        effortRating: normalizeSetEffortRating(set.effortRating),
+      })),
+    })),
+  };
 };
 
 /** Checks that an untrusted store record is an object carrying a string id key. */
@@ -213,7 +243,9 @@ export const createLocalDataRepository = ({
                 weeklyWorkoutTarget: normalizeWeeklyWorkoutTarget(settings.weeklyWorkoutTarget),
               })),
             ),
-            database.workoutSessions.bulkPut(data.workoutSessions),
+            database.workoutSessions.bulkPut(
+              data.workoutSessions.map(normalizeImportedWorkoutSession),
+            ),
             database.workoutTemplates.bulkPut(data.workoutTemplates),
           ]);
         },

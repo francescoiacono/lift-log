@@ -38,6 +38,7 @@ import type {
   AppSettings,
   EntityId,
   Exercise,
+  ExerciseConfidenceRating,
   ExerciseRepository,
   ExerciseTrackingMode,
   SettingsRepository,
@@ -98,12 +99,86 @@ type ExerciseFormState = {
   /** How sets are entered and compared for progress. */
   trackingMode: ExerciseTrackingMode;
 
+  /** Confidence performing the exercise, when rated. */
+  confidenceRating: ExerciseConfidenceRating | null;
+
   /** Notes textarea value. */
   notes: string;
 };
 
+/** Props for the reusable confidence-rating form field. */
+type ConfidenceRatingFieldProps = {
+  /** Current selected confidence rating. */
+  value: ExerciseConfidenceRating | null;
+
+  /** Unique radio-group name for the rendered form. */
+  inputName: string;
+
+  /** Localized exercise-library copy. */
+  messages: ExerciseLibraryMessages;
+
+  /** Called when the rating is selected or cleared. */
+  onChange: (value: ExerciseConfidenceRating | null) => void;
+};
+
 /** Async loading states used by the exercise library. */
 type LoadState = "loading" | "ready" | "error";
+
+/** Selectable values in the five-point exercise-confidence scale. */
+const confidenceRatings = [1, 2, 3, 4, 5] as const satisfies readonly ExerciseConfidenceRating[];
+
+/** Renders the optional five-star confidence selector used by exercise forms. */
+const ConfidenceRatingField = ({
+  value,
+  inputName,
+  messages,
+  onChange,
+}: ConfidenceRatingFieldProps) => {
+  return (
+    <fieldset className={styles.confidenceField}>
+      <legend className={styles.label}>{messages.confidenceLabel}</legend>
+      <p className={styles.confidenceHint}>{messages.confidenceHint}</p>
+      <div className={styles.confidenceControl}>
+        <div className={styles.confidenceStars}>
+          {confidenceRatings.map((rating) => (
+            <label
+              className={styles.confidenceStar({
+                filled: value !== null && rating <= value,
+              })}
+              key={rating}
+            >
+              <input
+                className={styles.visuallyHidden}
+                type="radio"
+                name={inputName}
+                value={rating}
+                checked={value === rating}
+                onChange={() => onChange(rating)}
+              />
+              <Star aria-hidden="true" />
+              <span className={styles.visuallyHidden}>
+                {messages.confidenceRatingLabel.replace("{rating}", String(rating))}
+              </span>
+            </label>
+          ))}
+        </div>
+        {value !== null ? (
+          <button
+            className={styles.clearConfidenceButton}
+            type="button"
+            onClick={() => onChange(null)}
+          >
+            {messages.clearConfidenceAction}
+          </button>
+        ) : null}
+      </div>
+      <div className={styles.confidenceEndpoints} aria-hidden="true">
+        <span>{messages.confidenceLowLabel}</span>
+        <span>{messages.confidenceHighLabel}</span>
+      </div>
+    </fieldset>
+  );
+};
 
 /** Creates an empty exercise form state. */
 const createEmptyFormState = (): ExerciseFormState => {
@@ -112,6 +187,7 @@ const createEmptyFormState = (): ExerciseFormState => {
     muscleGroups: "",
     equipment: "",
     trackingMode: "weighted",
+    confidenceRating: null,
     notes: "",
   };
 };
@@ -136,6 +212,7 @@ const toFormState = (exercise: Exercise): ExerciseFormState => {
     muscleGroups: formatMuscleGroups(exercise.muscleGroups),
     equipment: exercise.equipment ?? "",
     trackingMode: exercise.trackingMode,
+    confidenceRating: exercise.confidenceRating ?? null,
     notes: exercise.notes ?? "",
   };
 };
@@ -147,6 +224,7 @@ const toCreateInput = (formState: ExerciseFormState) => {
     muscleGroups: parseMuscleGroups(formState.muscleGroups),
     equipment: formState.equipment.trim() || null,
     trackingMode: formState.trackingMode,
+    confidenceRating: formState.confidenceRating,
     notes: formState.notes.trim() || null,
   };
 };
@@ -179,24 +257,32 @@ const formatWorkoutSet = (
   trackingMode: ExerciseTrackingMode,
   messages: ExerciseLibraryMessages,
 ): string => {
+  let setSummary: string;
+
   if (trackingMode === "timed") {
-    return messages.workoutSetDuration.replace("{seconds}", String(set.durationSeconds ?? 0));
+    setSummary = messages.workoutSetDuration.replace("{seconds}", String(set.durationSeconds ?? 0));
+  } else if (trackingMode === "bodyweight" || set.weight === null) {
+    setSummary =
+      set.reps === null
+        ? messages.noReps
+        : messages.workoutSetReps.replace("{reps}", String(set.reps));
+  } else {
+    const weight = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(
+      set.weight,
+    );
+
+    setSummary =
+      set.reps === null
+        ? `${weight} ${set.weightUnit}`
+        : messages.workoutSetWeightReps
+            .replace("{weight}", weight)
+            .replace("{unit}", set.weightUnit)
+            .replace("{reps}", String(set.reps));
   }
 
-  if (trackingMode === "bodyweight" || set.weight === null) {
-    return set.reps === null
-      ? messages.noReps
-      : messages.workoutSetReps.replace("{reps}", String(set.reps));
-  }
-
-  const weight = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(set.weight);
-
-  return set.reps === null
-    ? `${weight} ${set.weightUnit}`
-    : messages.workoutSetWeightReps
-        .replace("{weight}", weight)
-        .replace("{unit}", set.weightUnit)
-        .replace("{reps}", String(set.reps));
+  return set.effortRating
+    ? `${setSummary} · ${messages.effortValue.replace("{rating}", String(set.effortRating))}`
+    : setSummary;
 };
 
 /** Formats the aggregate line for one workout's exercise performance. */
@@ -581,6 +667,15 @@ export const ExerciseLibrary = ({
                 <Dumbbell className={styles.detailPillIcon} aria-hidden="true" />
                 {selectedExercise.equipment ?? messages.noEquipment}
               </span>
+              {selectedExercise.confidenceRating ? (
+                <span className={styles.detailPill({ tone: "confidence" })}>
+                  <Star className={styles.detailPillIcon} aria-hidden="true" />
+                  {messages.confidenceValue.replace(
+                    "{rating}",
+                    String(selectedExercise.confidenceRating),
+                  )}
+                </span>
+              ) : null}
             </div>
           </div>
         </div>
@@ -956,6 +1051,13 @@ export const ExerciseLibrary = ({
                     <span className={styles.checkboxHint}>{messages.trackingModeHint}</span>
                   </label>
 
+                  <ConfidenceRatingField
+                    inputName="exercise-detail-confidence"
+                    value={formState.confidenceRating}
+                    messages={messages}
+                    onChange={(rating) => updateFormField("confidenceRating", rating)}
+                  />
+
                   <div className={styles.formActions}>
                     <button className={styles.button({ variant: "primary" })} type="submit">
                       <Check className={styles.icon} aria-hidden="true" />
@@ -1090,6 +1192,13 @@ export const ExerciseLibrary = ({
                   <span className={styles.checkboxHint}>{messages.trackingModeHint}</span>
                 </label>
 
+                <ConfidenceRatingField
+                  inputName="exercise-library-confidence"
+                  value={formState.confidenceRating}
+                  messages={messages}
+                  onChange={(rating) => updateFormField("confidenceRating", rating)}
+                />
+
                 <div className={styles.formActions}>
                   <button className={styles.button({ variant: "primary" })} type="submit">
                     <Check className={styles.icon} aria-hidden="true" />
@@ -1138,7 +1247,18 @@ export const ExerciseLibrary = ({
               >
                 <div className={styles.exerciseHeading}>
                   <h2 className={styles.exerciseName}>{exercise.name}</h2>
-                  <p className={styles.equipment}>{exercise.equipment ?? messages.noEquipment}</p>
+                  <div className={styles.exerciseMetaRow}>
+                    <p className={styles.equipment}>{exercise.equipment ?? messages.noEquipment}</p>
+                    {exercise.confidenceRating ? (
+                      <span className={styles.confidenceBadge}>
+                        <Star aria-hidden="true" />
+                        {messages.confidenceValue.replace(
+                          "{rating}",
+                          String(exercise.confidenceRating),
+                        )}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className={styles.muscleGroups}>

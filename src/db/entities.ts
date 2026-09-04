@@ -7,6 +7,12 @@ export type IsoDateTime = string;
 /** Weight unit values supported by workout logging. */
 export type WeightUnit = "kg" | "lb";
 
+/** Subjective effort reported after completing a workout set. */
+export type SetEffortRating = 1 | 2 | 3 | 4 | 5;
+
+/** Confidence performing an exercise safely and with good technique. */
+export type ExerciseConfidenceRating = 1 | 2 | 3 | 4 | 5;
+
 /** Stable tracking semantics used to compare exercise performance. */
 export type ExerciseTrackingMode = "assisted" | "bodyweight" | "timed" | "weighted";
 
@@ -32,6 +38,9 @@ export type Exercise = {
 
   /** How sets are entered and compared for progress. */
   trackingMode: ExerciseTrackingMode;
+
+  /** Optional confidence performing the exercise, from low (1) to high (5). */
+  confidenceRating?: ExerciseConfidenceRating | null;
 
   /** Optional user notes for setup, cues, or substitutions. */
   notes: string | null;
@@ -107,6 +116,9 @@ export type WorkoutSet = {
 
   /** Rest duration started after this set, when one was used. */
   restSeconds: number | null;
+
+  /** Optional subjective effort from easy (1) to maximum (5). */
+  effortRating?: SetEffortRating | null;
 
   /** Optional notes for the logged set. */
   notes: string | null;

@@ -41,6 +41,7 @@ export type {
   CreateActiveWorkoutTemplateInput,
   CreateActiveWorkoutTemplateResult,
   CreateWorkoutTemplateFromSessionInput,
+  FinishActiveWorkoutInput,
   LogWorkoutSetInput,
   StartEmptyWorkoutInput,
   UpdateWorkoutSetInput,

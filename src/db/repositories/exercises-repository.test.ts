@@ -76,6 +76,7 @@ describe("createExerciseRepository", () => {
       muscleGroups: ["chest", "triceps"],
       equipment: "barbell",
       trackingMode: "weighted",
+      confidenceRating: null,
       notes: null,
       createdAt: "2026-05-07T10:00:00.000Z",
       updatedAt: "2026-05-07T10:00:00.000Z",
@@ -100,6 +101,26 @@ describe("createExerciseRepository", () => {
     await expect(repository.getById("exercise-1")).resolves.toMatchObject({
       trackingMode: "timed",
     });
+  });
+
+  it("creates and updates an optional confidence rating", async () => {
+    const repository = createExerciseRepository({
+      database: createTestDatabase(),
+      createId: createIdFactory(["exercise-1"]),
+      now: createTimestampFactory(["2026-05-07T10:00:00.000Z", "2026-05-07T10:02:00.000Z"]),
+    });
+
+    const exercise = await repository.create({
+      name: "Squat",
+      muscleGroups: ["quadriceps"],
+      confidenceRating: 2,
+    });
+
+    expect(exercise.confidenceRating).toBe(2);
+
+    const updatedExercise = await repository.update(exercise.id, { confidenceRating: 4 });
+
+    expect(updatedExercise?.confidenceRating).toBe(4);
   });
 
   it("normalizes muscle-group casing, aliases, and duplicates", async () => {

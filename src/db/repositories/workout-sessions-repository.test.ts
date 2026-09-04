@@ -207,6 +207,7 @@ describe("createWorkoutSessionRepository", () => {
       restSeconds: 120,
       weight: 80,
       weightUnit: "kg",
+      effortRating: 4,
     });
 
     expect(workoutSession?.exercises[0]?.sets).toEqual([
@@ -220,6 +221,7 @@ describe("createWorkoutSessionRepository", () => {
         isCompleted: true,
         completedAt: "2026-05-07T11:08:00.000Z",
         restSeconds: 120,
+        effortRating: 4,
         notes: null,
       },
     ]);
@@ -261,6 +263,7 @@ describe("createWorkoutSessionRepository", () => {
         isCompleted: true,
         completedAt: "2026-05-07T11:08:00.000Z",
         restSeconds: 60,
+        effortRating: null,
         notes: null,
       },
     ]);
@@ -602,6 +605,7 @@ describe("createWorkoutSessionRepository", () => {
       restSeconds: 90,
       weight: 82.5,
       weightUnit: "kg",
+      effortRating: 3,
     });
 
     expect(snapshot?.session.exercises[0]?.sets[0]).toMatchObject({
@@ -610,6 +614,7 @@ describe("createWorkoutSessionRepository", () => {
       restSeconds: 90,
       weight: 82.5,
       weightUnit: "kg",
+      effortRating: 3,
     });
     expect(snapshot?.activeWorkout).toMatchObject({
       restTimer: {
@@ -697,6 +702,7 @@ describe("createWorkoutSessionRepository", () => {
         isCompleted: true,
         completedAt: "2026-05-07T11:08:00.000Z",
         restSeconds: 120,
+        effortRating: null,
         notes: null,
       },
     ]);
@@ -852,6 +858,59 @@ describe("createWorkoutSessionRepository", () => {
       id: "session-1",
       status: "finished",
       finishedAt: "2026-05-07T11:45:00.000Z",
+      updatedAt: "2026-05-07T11:45:00.000Z",
+    });
+    await expect(database?.activeWorkout.get(activeWorkoutId)).resolves.toBeUndefined();
+  });
+
+  it("updates exercise confidence in the same transaction that finishes the workout", async () => {
+    const repository = createWorkoutSessionRepository({
+      database: createTestDatabase(),
+      createId: createIdFactory(["session-1"]),
+      now: createTimestampFactory(["2026-05-07T11:00:00.000Z", "2026-05-07T11:45:00.000Z"]),
+    });
+
+    await database?.exercises.bulkAdd([
+      {
+        id: "exercise-a",
+        name: "Bench press",
+        muscleGroups: ["chest"],
+        equipment: "Barbell",
+        trackingMode: "weighted",
+        confidenceRating: 2,
+        notes: null,
+        createdAt: "2026-05-07T10:00:00.000Z",
+        updatedAt: "2026-05-07T10:00:00.000Z",
+      },
+      {
+        id: "exercise-b",
+        name: "Triceps extension",
+        muscleGroups: ["triceps"],
+        equipment: "Cable",
+        trackingMode: "weighted",
+        confidenceRating: null,
+        notes: null,
+        createdAt: "2026-05-07T10:00:00.000Z",
+        updatedAt: "2026-05-07T10:00:00.000Z",
+      },
+    ]);
+    await database?.workoutTemplates.add(createWorkoutTemplate());
+    await repository.startFromTemplate("template-1");
+
+    const session = await repository.finishActive({
+      confidenceRatings: {
+        "exercise-a": 5,
+        "exercise-b": 3,
+      },
+    });
+
+    expect(session).toMatchObject({ id: "session-1", status: "finished" });
+    await expect(database?.exercises.get("exercise-a")).resolves.toMatchObject({
+      confidenceRating: 5,
+      updatedAt: "2026-05-07T11:45:00.000Z",
+    });
+    await expect(database?.exercises.get("exercise-b")).resolves.toMatchObject({
+      confidenceRating: 3,
       updatedAt: "2026-05-07T11:45:00.000Z",
     });
     await expect(database?.activeWorkout.get(activeWorkoutId)).resolves.toBeUndefined();

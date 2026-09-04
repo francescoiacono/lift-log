@@ -1,9 +1,10 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   AlertTriangle,
+  ArrowLeft,
   Check,
   CheckCircle2,
-  ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CirclePlus,
   Cloud,
@@ -11,12 +12,10 @@ import {
   Copy,
   Dumbbell,
   Flame,
-  History,
   HeartPulse,
   ListChecks,
   MoreVertical,
   Sparkles,
-  Star,
   Timer,
   TrendingUp,
   Trash2,
@@ -34,13 +33,16 @@ import {
   type MuscleRecoveryStatus,
 } from "./active-workout-dashboard-metrics";
 import { styles } from "./active-workout-screen.styles";
+import { WorkoutFinishReview, type FinishConfidenceDrafts } from "./workout-finish-review";
 import type {
   ActiveRestTimer,
   AppSettings,
   ActiveWorkoutSnapshot,
   EntityId,
   Exercise,
+  ExerciseConfidenceRating,
   ExerciseRepository,
+  SetEffortRating,
   SettingsRepository,
   WorkoutSet,
   WorkoutSession,
@@ -97,6 +99,9 @@ export type ActiveWorkoutScreenProps = {
 
   /** Called after the initial feedback message has been copied into local UI state. */
   onInitialFeedbackShown?: () => void;
+
+  /** Called when the workout enters or leaves an immersive logging or review screen. */
+  onWorkoutFocusChange?: (isFocused: boolean) => void;
 };
 
 /** Async loading states used by the active workout screen. */
@@ -117,6 +122,12 @@ type SetDraftState = {
   restSeconds: string;
 };
 
+/** Editable state for a previously completed workout set. */
+type SetEditDraftState = SetDraftState & {
+  /** Subjective effort selected for the completed set. */
+  effortRating: SetEffortRating | null;
+};
+
 /** Editable set logging state keyed by exercise id. */
 type SetDraftsByExerciseId = Partial<Record<EntityId, SetDraftState>>;
 
@@ -131,6 +142,9 @@ type EditingSetTarget = {
   /** Set identifier currently open in the settings dialog. */
   setId: EntityId;
 };
+
+/** Newly logged set waiting for an optional perceived-effort check-in. */
+type PendingEffortTarget = EditingSetTarget;
 
 /** Recent personal-best item shown on the focused Today dashboard. */
 type RecentProgressHighlight = {
@@ -151,6 +165,14 @@ const createEmptySetDraft = (): SetDraftState => {
     durationSeconds: "",
     weight: "",
     restSeconds: "",
+  };
+};
+
+/** Creates an empty draft for editing an existing completed set. */
+const createEmptySetEditDraft = (): SetEditDraftState => {
+  return {
+    ...createEmptySetDraft(),
+    effortRating: null,
   };
 };
 
@@ -244,33 +266,6 @@ const formatSetProgress = (
     .replace("{target}", String(targetSets));
 };
 
-/** Formats the planned rest target for an active workout exercise. */
-const formatRestTarget = (
-  restSeconds: number | null | undefined,
-  messages: ActiveWorkoutMessages,
-): string | null => {
-  if (!restSeconds) {
-    return null;
-  }
-
-  return messages.restTarget.replace("{seconds}", String(restSeconds));
-};
-
-/** Formats exercise progress and rest target metadata. */
-const formatExerciseMeta = (
-  sessionExercise: WorkoutSessionExercise,
-  messages: ActiveWorkoutMessages,
-): string => {
-  const restTarget = formatRestTarget(sessionExercise.restSeconds, messages);
-  const setProgress = formatSetProgress(
-    sessionExercise.sets.filter((set) => set.isCompleted).length,
-    sessionExercise.targetSets,
-    messages,
-  );
-
-  return restTarget ? `${setProgress} · ${restTarget}` : setProgress;
-};
-
 /** Formats a compact numeric stat for dashboard cards. */
 const formatDashboardNumber = (value: number): string => {
   return new Intl.NumberFormat(undefined, {
@@ -331,27 +326,6 @@ const formatProgressHighlight = (
     .replace("{name}", highlight.exercise.name)
     .replace("{value}", value)
     .replace("{unit}", weightUnit);
-};
-
-/** Formats a compact previous-best value for the active workout. */
-const formatPreviousBestValue = (
-  highlight: RecentProgressHighlight,
-  weightUnit: AppSettings["weightUnit"],
-  messages: ActiveWorkoutMessages,
-): string => {
-  const value = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(
-    highlight.point.value,
-  );
-
-  if (highlight.kind === "duration") {
-    return messages.previousBestDuration.replace("{value}", value);
-  }
-
-  if (highlight.kind === "repetitions") {
-    return messages.previousBestRepetitions.replace("{value}", value);
-  }
-
-  return messages.previousBestWeight.replace("{value}", value).replace("{unit}", weightUnit);
 };
 
 /** Formats the compact recency line for one muscle-recovery item. */
@@ -425,29 +399,30 @@ const calculateWorkoutCompletionPercent = (session: WorkoutSession | undefined):
   return Math.min(100, Math.round((completedSets / plannedSets) * 100));
 };
 
-/** Formats a set's primary effort as either a hold duration or a rep count. */
-const formatSetEffort = (set: WorkoutSet, messages: ActiveWorkoutMessages): string => {
-  if (set.durationSeconds != null) {
-    return messages.durationValue.replace("{seconds}", String(set.durationSeconds));
-  }
-
-  return set.reps === null ? messages.noReps : formatCountMessage(messages.repsCount, set.reps);
+/** Formats the ordinal position of the focused exercise in the active workout. */
+const formatExercisePosition = (
+  current: number,
+  total: number,
+  messages: ActiveWorkoutMessages,
+): string => {
+  return messages.exercisePosition
+    .replace("{current}", String(current))
+    .replace("{total}", String(total));
 };
 
-/** Formats a completed set into a compact workout log summary. */
-const formatLoggedSet = (set: WorkoutSet, messages: ActiveWorkoutMessages): string => {
-  const setLabel = messages.setNumberLabel.replace("{number}", String(set.order + 1));
-  const repsLabel = formatSetEffort(set, messages);
-  const weightLabel =
-    set.weight === null
-      ? messages.noWeight
-      : formatWeightMessage(messages.weightValue, set.weight, set.weightUnit);
-  const restLabel =
-    set.restSeconds === null
-      ? messages.noRestLogged
-      : messages.restValue.replace("{seconds}", String(set.restSeconds));
+/** Formats the next set number with an optional target count. */
+const formatNextSetPosition = (
+  completedSets: number,
+  targetSets: number | null,
+  messages: ActiveWorkoutMessages,
+): string => {
+  const currentSet = completedSets + 1;
 
-  return `${setLabel} · ${repsLabel} · ${weightLabel} · ${restLabel}`;
+  return targetSets && currentSet <= targetSets
+    ? messages.nextSetWithTarget
+        .replace("{current}", String(currentSet))
+        .replace("{target}", String(targetSets))
+    : messages.nextSet.replace("{current}", String(currentSet));
 };
 
 /** Formats one previous set as a compact weight × reps (or hold duration) summary. */
@@ -599,6 +574,7 @@ export const ActiveWorkoutScreen = ({
   settingsStore = settingsRepository,
   onOpenHistory,
   onInitialFeedbackShown,
+  onWorkoutFocusChange,
 }: ActiveWorkoutScreenProps) => {
   const [snapshot, setSnapshot] = useState<ActiveWorkoutSnapshot | undefined>();
   const [exercises, setExercises] = useState<Exercise[]>([]);
@@ -609,6 +585,8 @@ export const ActiveWorkoutScreen = ({
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(initialFeedbackMessage);
   const [isStartingWorkout, setIsStartingWorkout] = useState(false);
   const [isFinishing, setIsFinishing] = useState(false);
+  const [isFinishReviewOpen, setIsFinishReviewOpen] = useState(false);
+  const [finishConfidenceDrafts, setFinishConfidenceDrafts] = useState<FinishConfidenceDrafts>({});
   const [isSavePlanDialogOpen, setIsSavePlanDialogOpen] = useState(false);
   const [savePlanName, setSavePlanName] = useState("");
   const [isSavingPlan, setIsSavingPlan] = useState(false);
@@ -616,14 +594,16 @@ export const ActiveWorkoutScreen = ({
   const [addingExerciseId, setAddingExerciseId] = useState<EntityId | null>(null);
   const [savingSetExerciseId, setSavingSetExerciseId] = useState<EntityId | null>(null);
   const [setDrafts, setSetDrafts] = useState<SetDraftsByExerciseId>({});
-  const [openExerciseIds, setOpenExerciseIds] = useState<EntityId[]>([]);
+  const [focusedExerciseId, setFocusedExerciseId] = useState<EntityId | null>(null);
   const [initializedSessionId, setInitializedSessionId] = useState<EntityId | null>(null);
   const [editingSetTarget, setEditingSetTarget] = useState<EditingSetTarget | null>(null);
-  const [setEditDraft, setSetEditDraft] = useState<SetDraftState>(createEmptySetDraft);
+  const [setEditDraft, setSetEditDraft] = useState<SetEditDraftState>(createEmptySetEditDraft);
   const [isSetDialogOpen, setIsSetDialogOpen] = useState(false);
   const [isExerciseDialogOpen, setIsExerciseDialogOpen] = useState(false);
   const [isSavingSetEdit, setIsSavingSetEdit] = useState(false);
   const [isDeletingSet, setIsDeletingSet] = useState(false);
+  const [pendingEffortTarget, setPendingEffortTarget] = useState<PendingEffortTarget | null>(null);
+  const [isSavingEffort, setIsSavingEffort] = useState(false);
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
 
   const exerciseById = useMemo(() => {
@@ -702,28 +682,6 @@ export const ActiveWorkoutScreen = ({
       )
       .slice(0, 2);
   }, [exercises, finishedSessions, settings?.weightUnit]);
-  const previousBestByExerciseId = useMemo(() => {
-    const previousBest = new Map<EntityId, RecentProgressHighlight>();
-
-    for (const exercise of exercises) {
-      const progress = buildExerciseProgress(
-        exercise,
-        finishedSessions,
-        settings?.weightUnit ?? "kg",
-      );
-      const bestPoint = [...progress.points].sort((firstPoint, secondPoint) =>
-        progress.kind === "assistance"
-          ? firstPoint.value - secondPoint.value
-          : secondPoint.value - firstPoint.value,
-      )[0];
-
-      if (bestPoint) {
-        previousBest.set(exercise.id, { exercise, kind: progress.kind, point: bestPoint });
-      }
-    }
-
-    return previousBest;
-  }, [exercises, finishedSessions, settings?.weightUnit]);
   const activeSetProgress = activeSession
     ? getWorkoutSetProgress(activeSession)
     : { completedSets: 0, plannedSets: 0 };
@@ -733,12 +691,43 @@ export const ActiveWorkoutScreen = ({
     isSavingPlan ||
     isClearingTimer ||
     isSavingSetEdit ||
+    isSavingEffort ||
     isDeletingSet ||
     addingExerciseId !== null ||
     savingSetExerciseId !== null;
   const remainingRestSeconds = activeRestTimer
     ? getRemainingRestSeconds(activeRestTimer, timerNowMs)
     : 0;
+  const focusedExerciseIndex = sessionExercises.findIndex(
+    (exercise) => exercise.exerciseId === focusedExerciseId,
+  );
+  const focusedSessionExercise =
+    focusedExerciseIndex >= 0 ? sessionExercises[focusedExerciseIndex] : undefined;
+  const isWorkoutFocused = focusedSessionExercise !== undefined;
+  const isImmersiveWorkoutView = isWorkoutFocused || isFinishReviewOpen;
+  const focusedExercise = focusedSessionExercise
+    ? exerciseById.get(focusedSessionExercise.exerciseId)
+    : undefined;
+  const focusedSets = focusedSessionExercise ? sortWorkoutSets(focusedSessionExercise.sets) : [];
+  const focusedCompletedSetCount = focusedSets.filter((set) => set.isCompleted).length;
+  const focusedLastSession = focusedSessionExercise
+    ? lastSessionByExerciseId.get(focusedSessionExercise.exerciseId)
+    : undefined;
+  const focusedPreviousSet =
+    focusedLastSession?.sets[
+      Math.min(focusedCompletedSetCount, focusedLastSession.sets.length - 1)
+    ];
+  const focusedSetDraft = focusedSessionExercise
+    ? getSetDraft(setDrafts, focusedSessionExercise.exerciseId)
+    : createEmptySetDraft();
+  const previousSessionExercise = sessionExercises[focusedExerciseIndex - 1];
+  const nextSessionExercise = sessionExercises[focusedExerciseIndex + 1];
+  const previousExerciseName = previousSessionExercise
+    ? (exerciseById.get(previousSessionExercise.exerciseId)?.name ?? messages.missingExercise)
+    : null;
+  const nextExerciseName = nextSessionExercise
+    ? (exerciseById.get(nextSessionExercise.exerciseId)?.name ?? messages.missingExercise)
+    : null;
   const editingSetContext = useMemo(() => {
     if (!activeSession || !editingSetTarget) {
       return undefined;
@@ -800,12 +789,16 @@ export const ActiveWorkoutScreen = ({
       return;
     }
 
+    setFocusedExerciseId(null);
+    setIsFinishReviewOpen(false);
+    setFinishConfidenceDrafts({});
+    setPendingEffortTarget(null);
     setEditingSetTarget(null);
     setIsExerciseDialogOpen(false);
     setIsSavePlanDialogOpen(false);
     setIsSetDialogOpen(false);
     setSavePlanName("");
-    setSetEditDraft(createEmptySetDraft());
+    setSetEditDraft(createEmptySetEditDraft());
     setFeedbackMessage(null);
   }, [isActive]);
 
@@ -817,8 +810,10 @@ export const ActiveWorkoutScreen = ({
 
   useEffect(() => {
     if (!activeSession) {
-      setOpenExerciseIds([]);
+      setFocusedExerciseId(null);
       setInitializedSessionId(null);
+      setIsFinishReviewOpen(false);
+      setFinishConfidenceDrafts({});
       return;
     }
 
@@ -826,9 +821,23 @@ export const ActiveWorkoutScreen = ({
       return;
     }
 
-    setOpenExerciseIds(sessionExercises[0] ? [sessionExercises[0].exerciseId] : []);
+    const firstIncompleteExercise = sessionExercises.find((exercise) => {
+      const completedSets = exercise.sets.filter((set) => set.isCompleted).length;
+
+      return exercise.targetSets === null || completedSets < exercise.targetSets;
+    });
+
+    setFocusedExerciseId(
+      firstIncompleteExercise?.exerciseId ?? sessionExercises[0]?.exerciseId ?? null,
+    );
     setInitializedSessionId(activeSession.id);
   }, [activeSession, initializedSessionId, sessionExercises]);
+
+  useEffect(() => {
+    onWorkoutFocusChange?.(isActive && isImmersiveWorkoutView);
+
+    return () => onWorkoutFocusChange?.(false);
+  }, [isActive, isImmersiveWorkoutView, onWorkoutFocusChange]);
 
   useEffect(() => {
     if (!activeRestTimer) {
@@ -844,20 +853,76 @@ export const ActiveWorkoutScreen = ({
     return () => globalThis.clearInterval(intervalId);
   }, [activeRestTimer]);
 
-  /** Finishes the current active workout session. */
+  /** Opens the final workout review with current exercise confidence values. */
+  const openFinishReview = () => {
+    const confidenceDrafts = sessionExercises.reduce<FinishConfidenceDrafts>(
+      (drafts, sessionExercise) => {
+        const exercise = exerciseById.get(sessionExercise.exerciseId);
+
+        if (exercise) {
+          drafts[exercise.id] = exercise.confidenceRating ?? null;
+        }
+
+        return drafts;
+      },
+      {},
+    );
+
+    setFinishConfidenceDrafts(confidenceDrafts);
+    setFeedbackMessage(null);
+    setIsFinishReviewOpen(true);
+    globalThis.scrollTo({ top: 0 });
+  };
+
+  /** Returns from the final review to the still-active workout. */
+  const closeFinishReview = () => {
+    setFeedbackMessage(null);
+    setIsFinishReviewOpen(false);
+    globalThis.scrollTo({ top: 0 });
+  };
+
+  /** Updates one exercise confidence draft before the workout is saved. */
+  const updateFinishConfidence = (
+    exerciseId: EntityId,
+    rating: ExerciseConfidenceRating | null,
+  ) => {
+    setFinishConfidenceDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [exerciseId]: rating,
+    }));
+  };
+
+  /** Persists confidence changes and finishes the current active workout session. */
   const finishWorkout = async () => {
     setIsFinishing(true);
     setFeedbackMessage(null);
 
     try {
-      const finishedWorkout = await repository.finishActive();
+      const finishedWorkout = await repository.finishActive({
+        confidenceRatings: finishConfidenceDrafts,
+      });
 
       if (!finishedWorkout) {
         setFeedbackMessage(messages.finishError);
+        globalThis.scrollTo({ top: 0 });
         return;
       }
 
+      setExercises((currentExercises) =>
+        currentExercises.map((exercise) => {
+          const confidenceRating = finishConfidenceDrafts[exercise.id];
+
+          return confidenceRating === undefined ||
+            (exercise.confidenceRating ?? null) === confidenceRating
+            ? exercise
+            : { ...exercise, confidenceRating, updatedAt: finishedWorkout.updatedAt };
+        }),
+      );
       setSnapshot(undefined);
+      setFocusedExerciseId(null);
+      setIsFinishReviewOpen(false);
+      setFinishConfidenceDrafts({});
+      setPendingEffortTarget(null);
       setFinishedSessions((currentSessions) =>
         sortWorkoutSessionsByStartedAt([
           finishedWorkout,
@@ -867,6 +932,7 @@ export const ActiveWorkoutScreen = ({
       setFeedbackMessage(messages.finishSuccess);
     } catch {
       setFeedbackMessage(messages.finishError);
+      globalThis.scrollTo({ top: 0 });
     } finally {
       setIsFinishing(false);
     }
@@ -1043,11 +1109,7 @@ export const ActiveWorkoutScreen = ({
       }
 
       setSnapshot(nextSnapshot);
-      setOpenExerciseIds((currentOpenExerciseIds) =>
-        currentOpenExerciseIds.includes(exerciseId)
-          ? currentOpenExerciseIds
-          : [...currentOpenExerciseIds, exerciseId],
-      );
+      setFocusedExerciseId(exerciseId);
       setIsExerciseDialogOpen(false);
     } catch {
       setFeedbackMessage(messages.addExerciseError);
@@ -1088,13 +1150,22 @@ export const ActiveWorkoutScreen = ({
     }));
   };
 
-  /** Toggles one exercise card between open and closed states. */
-  const toggleExercise = (exerciseId: EntityId) => {
-    setOpenExerciseIds((currentOpenExerciseIds) =>
-      currentOpenExerciseIds.includes(exerciseId)
-        ? currentOpenExerciseIds.filter((currentExerciseId) => currentExerciseId !== exerciseId)
-        : [...currentOpenExerciseIds, exerciseId],
-    );
+  /** Opens one exercise in the distraction-free workout logger. */
+  const focusExercise = (exerciseId: EntityId) => {
+    if (pendingEffortTarget?.exerciseId !== exerciseId) {
+      setPendingEffortTarget(null);
+    }
+    setFocusedExerciseId(exerciseId);
+    setFeedbackMessage(null);
+    globalThis.scrollTo({ top: 0 });
+  };
+
+  /** Returns from the focused logger to the active-workout overview. */
+  const showWorkoutOverview = () => {
+    setFocusedExerciseId(null);
+    setPendingEffortTarget(null);
+    setFeedbackMessage(null);
+    globalThis.scrollTo({ top: 0 });
   };
 
   /** Opens the set settings dialog with the selected set values. */
@@ -1108,6 +1179,7 @@ export const ActiveWorkoutScreen = ({
       durationSeconds: formatOptionalInteger(set.durationSeconds ?? null),
       weight: formatOptionalNumber(set.weight),
       restSeconds: formatOptionalInteger(set.restSeconds),
+      effortRating: set.effortRating ?? null,
     });
     setFeedbackMessage(null);
     setIsSetDialogOpen(true);
@@ -1116,7 +1188,7 @@ export const ActiveWorkoutScreen = ({
   /** Closes the set settings dialog and clears transient edit state. */
   const closeSetDialog = () => {
     setEditingSetTarget(null);
-    setSetEditDraft(createEmptySetDraft());
+    setSetEditDraft(createEmptySetEditDraft());
     setFeedbackMessage(null);
     setIsSetDialogOpen(false);
   };
@@ -1136,6 +1208,14 @@ export const ActiveWorkoutScreen = ({
     setSetEditDraft((currentDraft) => ({
       ...currentDraft,
       [field]: value,
+    }));
+  };
+
+  /** Updates the subjective effort field in the set settings dialog. */
+  const updateSetEditEffort = (effortRating: SetEffortRating | null) => {
+    setSetEditDraft((currentDraft) => ({
+      ...currentDraft,
+      effortRating,
     }));
   };
 
@@ -1188,6 +1268,9 @@ export const ActiveWorkoutScreen = ({
       }
 
       const nextSnapshot = await repository.getActive();
+      const loggedSet = workoutSession.exercises
+        .find((exercise) => exercise.exerciseId === sessionExercise.exerciseId)
+        ?.sets.at(-1);
 
       setSnapshot((currentSnapshot) => {
         if (nextSnapshot) {
@@ -1201,10 +1284,67 @@ export const ActiveWorkoutScreen = ({
             }
           : currentSnapshot;
       });
+      if (loggedSet) {
+        setPendingEffortTarget({
+          exerciseId: sessionExercise.exerciseId,
+          setId: loggedSet.id,
+        });
+      }
     } catch {
       setFeedbackMessage(messages.logSetError);
     } finally {
       setSavingSetExerciseId(null);
+    }
+  };
+
+  /** Saves a perceived-effort rating for the newly logged set. */
+  const savePendingEffort = async (effortRating: SetEffortRating) => {
+    if (!activeSession || !pendingEffortTarget) {
+      return;
+    }
+
+    const sessionExercise = activeSession.exercises.find(
+      (exercise) => exercise.exerciseId === pendingEffortTarget.exerciseId,
+    );
+    const set = sessionExercise?.sets.find(
+      (workoutSet) => workoutSet.id === pendingEffortTarget.setId,
+    );
+
+    if (!set) {
+      setPendingEffortTarget(null);
+      return;
+    }
+
+    setIsSavingEffort(true);
+    setFeedbackMessage(null);
+
+    try {
+      const nextSnapshot = await repository.updateSet(
+        activeSession.id,
+        pendingEffortTarget.exerciseId,
+        pendingEffortTarget.setId,
+        {
+          reps: set.reps,
+          durationSeconds: set.durationSeconds ?? null,
+          weight: set.weight,
+          weightUnit: set.weightUnit,
+          restSeconds: set.restSeconds,
+          effortRating,
+          notes: set.notes,
+        },
+      );
+
+      if (!nextSnapshot) {
+        setFeedbackMessage(messages.saveEffortError);
+        return;
+      }
+
+      setSnapshot(nextSnapshot);
+      setPendingEffortTarget(null);
+    } catch {
+      setFeedbackMessage(messages.saveEffortError);
+    } finally {
+      setIsSavingEffort(false);
     }
   };
 
@@ -1278,6 +1418,8 @@ export const ActiveWorkoutScreen = ({
           restSeconds,
           weight,
           weightUnit: editingSetContext.set.weightUnit,
+          effortRating: setEditDraft.effortRating,
+          notes: editingSetContext.set.notes,
         },
       );
 
@@ -1287,6 +1429,9 @@ export const ActiveWorkoutScreen = ({
       }
 
       setSnapshot(nextSnapshot);
+      if (pendingEffortTarget?.setId === editingSetTarget.setId) {
+        setPendingEffortTarget(null);
+      }
       closeSetDialog();
     } catch {
       setFeedbackMessage(messages.saveSetError);
@@ -1318,6 +1463,9 @@ export const ActiveWorkoutScreen = ({
       }
 
       setSnapshot(nextSnapshot);
+      if (pendingEffortTarget?.setId === editingSetTarget.setId) {
+        setPendingEffortTarget(null);
+      }
       closeSetDialog();
     } catch {
       setFeedbackMessage(messages.deleteSetError);
@@ -1484,7 +1632,20 @@ export const ActiveWorkoutScreen = ({
         </div>
       ) : null}
 
-      {loadState === "ready" && activeSession ? (
+      {loadState === "ready" && activeSession && isFinishReviewOpen ? (
+        <WorkoutFinishReview
+          session={activeSession}
+          exerciseById={exerciseById}
+          confidenceDrafts={finishConfidenceDrafts}
+          isSaving={isPersistingWorkout}
+          messages={messages}
+          onBack={closeFinishReview}
+          onConfidenceChange={updateFinishConfidence}
+          onSave={() => void finishWorkout()}
+        />
+      ) : null}
+
+      {loadState === "ready" && activeSession && !focusedSessionExercise && !isFinishReviewOpen ? (
         <article
           id="active-session-panel"
           className={styles.sessionPanel}
@@ -1499,6 +1660,7 @@ export const ActiveWorkoutScreen = ({
               </span>
             </aside>
           ) : null}
+
           <div className={styles.sessionHeader}>
             <div className={styles.sessionHeading}>
               <p className={styles.sessionStatus}>{messages.inProgressLabel}</p>
@@ -1514,39 +1676,15 @@ export const ActiveWorkoutScreen = ({
                 {isPersistingWorkout ? messages.savingOffline : messages.savedOffline}
               </p>
             </div>
-            <div className={styles.sessionActions}>
-              <button
-                className={styles.button({ variant: "primary" })}
-                type="button"
-                disabled={!canAddExercise}
-                onClick={openExerciseDialog}
-              >
-                <CirclePlus className={styles.icon} aria-hidden="true" />
-                <span>{messages.addExerciseAction}</span>
-              </button>
-              {activeSession.templateId === null ? (
-                <button
-                  className={styles.button({ variant: "secondary" })}
-                  type="button"
-                  disabled={!canSaveActiveWorkoutAsPlan || isSavingPlan}
-                  onClick={openSavePlanDialog}
-                >
-                  <ClipboardList className={styles.icon} aria-hidden="true" />
-                  <span>
-                    {isSavingPlan ? messages.savingPlanAction : messages.saveAsPlanAction}
-                  </span>
-                </button>
-              ) : null}
-              <button
-                className={styles.button({ variant: "secondary" })}
-                type="button"
-                disabled={isFinishing}
-                onClick={() => void finishWorkout()}
-              >
-                <CheckCircle2 className={styles.icon} aria-hidden="true" />
-                <span>{isFinishing ? messages.finishingAction : messages.finishAction}</span>
-              </button>
-            </div>
+            <button
+              className={styles.button({ variant: "primary" })}
+              type="button"
+              disabled={isPersistingWorkout}
+              onClick={openFinishReview}
+            >
+              <CheckCircle2 className={styles.icon} aria-hidden="true" />
+              <span>{isFinishing ? messages.finishingAction : messages.finishAction}</span>
+            </button>
           </div>
 
           <div className={styles.sessionProgress}>
@@ -1574,227 +1712,393 @@ export const ActiveWorkoutScreen = ({
           </div>
 
           {sessionExercises.length === 0 ? (
-            <div className={styles.emptyState}>
+            <div className={styles.overviewEmpty}>
               <Dumbbell className={styles.emptyIcon} aria-hidden="true" />
               <h3 className={styles.emptyTitle}>{messages.noExercisesTitle}</h3>
               <p className={styles.emptyDescription}>{messages.noExercisesDescription}</p>
-              <button
-                className={styles.button({ variant: "primary" })}
-                type="button"
-                disabled={!canAddExercise}
-                onClick={openExerciseDialog}
-              >
-                <CirclePlus className={styles.icon} aria-hidden="true" />
-                <span>{messages.addExerciseAction}</span>
-              </button>
             </div>
           ) : (
-            <ul className={styles.exerciseList}>
-              {sessionExercises.map((sessionExercise) => {
-                const exercise = exerciseById.get(sessionExercise.exerciseId);
-                const exerciseName = exercise?.name ?? messages.missingExercise;
-                const tracksDuration = exercise?.trackingMode === "timed";
-                const tracksWeight = exercise?.trackingMode !== "bodyweight";
-                const setDraft = getSetDraft(setDrafts, sessionExercise.exerciseId);
-                const sets = sortWorkoutSets(sessionExercise.sets);
-                const completedSetCount = sets.filter((set) => set.isCompleted).length;
-                const isSavingSet = savingSetExerciseId === sessionExercise.exerciseId;
-                const isExerciseOpen = openExerciseIds.includes(sessionExercise.exerciseId);
-                const lastSession = lastSessionByExerciseId.get(sessionExercise.exerciseId);
-                const previousSetToCopy =
-                  lastSession?.sets[Math.min(completedSetCount, lastSession.sets.length - 1)];
-                const previousBest = previousBestByExerciseId.get(sessionExercise.exerciseId);
+            <section className={styles.overviewSection} aria-labelledby="workout-exercises-title">
+              <div className={styles.sectionHeader}>
+                <div>
+                  <h3 className={styles.sectionTitle} id="workout-exercises-title">
+                    {messages.workoutExercisesTitle}
+                  </h3>
+                  <p className={styles.overviewHint}>{messages.workoutExercisesDescription}</p>
+                </div>
+              </div>
+              <ol className={styles.overviewExerciseList}>
+                {sessionExercises.map((sessionExercise, index) => {
+                  const exercise = exerciseById.get(sessionExercise.exerciseId);
+                  const completedSets = sessionExercise.sets.filter(
+                    (set) => set.isCompleted,
+                  ).length;
+                  const latestSet = sortWorkoutSets(sessionExercise.sets).at(-1);
+                  const isComplete =
+                    sessionExercise.targetSets !== null &&
+                    completedSets >= sessionExercise.targetSets;
 
-                return (
-                  <li className={styles.exerciseCard} key={sessionExercise.exerciseId}>
-                    <button
-                      className={styles.exerciseToggle}
-                      type="button"
-                      aria-expanded={isExerciseOpen}
-                      aria-label={formatExerciseToggleLabel(
-                        isExerciseOpen
-                          ? messages.collapseExerciseAriaLabel
-                          : messages.expandExerciseAriaLabel,
-                        exerciseName,
-                      )}
-                      onClick={() => toggleExercise(sessionExercise.exerciseId)}
-                    >
-                      <span className={styles.exerciseHeading}>
-                        <span className={styles.exerciseName}>{exerciseName}</span>
-                        <span className={styles.exerciseMeta}>
-                          {formatExerciseMeta(sessionExercise, messages)}
-                        </span>
-                      </span>
-                      <ChevronDown
-                        className={styles.exerciseChevron({ open: isExerciseOpen })}
-                        aria-hidden="true"
-                      />
-                    </button>
-
-                    {isExerciseOpen ? (
-                      <div className={styles.exerciseDetails}>
-                        {lastSession ? (
-                          <div className={styles.lastSession}>
-                            <History className={styles.lastSessionIcon} aria-hidden="true" />
-                            <span className={styles.lastSessionText}>
-                              {messages.lastSessionLabel}:{" "}
-                              {lastSession.sets
-                                .map((set) => formatLastSessionSet(set, messages))
-                                .join(" · ")}
-                            </span>
-                            {previousSetToCopy ? (
-                              <button
-                                className={styles.copyPreviousButton}
-                                type="button"
-                                aria-label={messages.copyPreviousSetAction}
-                                onClick={() =>
-                                  copyPreviousSet(sessionExercise.exerciseId, previousSetToCopy)
-                                }
-                              >
-                                <Copy className={styles.setActionIcon} aria-hidden="true" />
-                                <span className={styles.copyPreviousLabel}>
-                                  {messages.copyPreviousSetAction}
-                                </span>
-                              </button>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {previousBest ? (
-                          <p className={styles.previousBest}>
-                            <Star className={styles.previousBestIcon} aria-hidden="true" />
-                            <span>{messages.previousBestLabel}</span>
-                            <strong>
-                              {formatPreviousBestValue(
-                                previousBest,
-                                settings?.weightUnit ?? "kg",
-                                messages,
+                  return (
+                    <li key={sessionExercise.exerciseId}>
+                      <button
+                        className={styles.overviewExerciseButton}
+                        type="button"
+                        aria-label={formatExerciseToggleLabel(
+                          messages.openFocusedExerciseAriaLabel,
+                          exercise?.name ?? messages.missingExercise,
+                        )}
+                        onClick={() => focusExercise(sessionExercise.exerciseId)}
+                      >
+                        <span className={styles.overviewExerciseNumber}>{index + 1}</span>
+                        <span className={styles.overviewExerciseText}>
+                          <strong>{exercise?.name ?? messages.missingExercise}</strong>
+                          <span>
+                            {formatSetProgress(completedSets, sessionExercise.targetSets, messages)}
+                          </span>
+                          {latestSet ? (
+                            <small>
+                              {messages.lastLoggedSet.replace(
+                                "{set}",
+                                formatLastSessionSet(latestSet, messages),
                               )}
-                            </strong>
-                          </p>
-                        ) : null}
-                        {sets.length > 0 ? (
-                          <ol className={styles.setList}>
-                            {sets.map((set) => (
-                              <li className={styles.setRow} key={set.id}>
-                                <span className={styles.setSummary}>
-                                  {formatLoggedSet(set, messages)}
-                                </span>
-                                <button
-                                  className={styles.setActionButton}
-                                  type="button"
-                                  aria-label={formatSetActionLabel(
-                                    messages.setSettingsAriaLabel,
-                                    set,
-                                    exerciseName,
-                                  )}
-                                  onClick={() => openSetSettings(sessionExercise, set)}
-                                >
-                                  <MoreVertical
-                                    className={styles.setActionIcon}
-                                    aria-hidden="true"
-                                  />
-                                </button>
-                              </li>
-                            ))}
-                          </ol>
-                        ) : null}
-
-                        <form
-                          className={styles.setForm}
-                          onSubmit={(event) => void logWorkoutSet(event, sessionExercise)}
-                        >
-                          <div className={styles.setFields}>
-                            <label className={styles.setField}>
-                              <span className={styles.setLabel}>
-                                {tracksDuration ? messages.durationLabel : messages.repsLabel}
-                              </span>
-                              <input
-                                className={styles.setInput}
-                                type="text"
-                                inputMode="numeric"
-                                pattern="[0-9]*"
-                                value={tracksDuration ? setDraft.durationSeconds : setDraft.reps}
-                                placeholder={
-                                  tracksDuration
-                                    ? messages.durationPlaceholder
-                                    : messages.repsPlaceholder
-                                }
-                                onChange={(event) =>
-                                  updateSetDraft(
-                                    sessionExercise.exerciseId,
-                                    tracksDuration ? "durationSeconds" : "reps",
-                                    event.currentTarget.value,
-                                  )
-                                }
-                              />
-                            </label>
-                            {tracksWeight ? (
-                              <label className={styles.setField}>
-                                <span className={styles.setLabel}>
-                                  {exercise?.trackingMode === "assisted"
-                                    ? messages.assistanceLabel
-                                    : messages.weightLabel}
-                                </span>
-                                <input
-                                  className={styles.setInput}
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={setDraft.weight}
-                                  placeholder={messages.weightPlaceholder}
-                                  onChange={(event) =>
-                                    updateSetDraft(
-                                      sessionExercise.exerciseId,
-                                      "weight",
-                                      event.currentTarget.value,
-                                    )
-                                  }
-                                />
-                              </label>
-                            ) : null}
-                            <label className={styles.setField}>
-                              <span className={styles.setLabel}>{messages.restSecondsLabel}</span>
-                              <input
-                                className={styles.setInput}
-                                type="text"
-                                inputMode="numeric"
-                                pattern="[0-9]*"
-                                value={setDraft.restSeconds}
-                                placeholder={String(
-                                  sessionExercise.restSeconds ?? messages.restSecondsPlaceholder,
-                                )}
-                                onChange={(event) =>
-                                  updateSetDraft(
-                                    sessionExercise.exerciseId,
-                                    "restSeconds",
-                                    event.currentTarget.value,
-                                  )
-                                }
-                              />
-                            </label>
-                          </div>
-                          <button
-                            className={styles.button({ variant: "primary" })}
-                            type="submit"
-                            disabled={isSavingSet}
-                          >
-                            <CirclePlus className={styles.icon} aria-hidden="true" />
-                            <span>
-                              {isSavingSet ? messages.loggingSetAction : messages.logSetAction}
-                            </span>
-                          </button>
-                        </form>
-                      </div>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
+                            </small>
+                          ) : null}
+                        </span>
+                        <span className={styles.overviewExerciseState({ complete: isComplete })}>
+                          {isComplete
+                            ? messages.exerciseCompleteLabel
+                            : completedSets > 0
+                              ? messages.exerciseInProgressLabel
+                              : messages.exerciseReadyLabel}
+                        </span>
+                        <ChevronRight className={styles.overviewChevron} aria-hidden="true" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
           )}
+
+          <div className={styles.overviewActions}>
+            <button
+              className={styles.button({ variant: "secondary" })}
+              type="button"
+              disabled={!canAddExercise}
+              onClick={openExerciseDialog}
+            >
+              <CirclePlus className={styles.icon} aria-hidden="true" />
+              <span>{messages.addExerciseAction}</span>
+            </button>
+            {activeSession.templateId === null ? (
+              <button
+                className={styles.button({ variant: "secondary" })}
+                type="button"
+                disabled={!canSaveActiveWorkoutAsPlan || isSavingPlan}
+                onClick={openSavePlanDialog}
+              >
+                <ClipboardList className={styles.icon} aria-hidden="true" />
+                <span>{isSavingPlan ? messages.savingPlanAction : messages.saveAsPlanAction}</span>
+              </button>
+            ) : null}
+          </div>
         </article>
       ) : null}
 
-      {isActive && activeRestTimer ? (
-        <div className={styles.restTimerPill}>
+      {loadState === "ready" && activeSession && focusedSessionExercise && !isFinishReviewOpen ? (
+        <article
+          id="active-session-panel"
+          className={styles.focusedPanel}
+          aria-labelledby="focused-exercise-title"
+        >
+          <header className={styles.focusedTopBar}>
+            <button
+              className={styles.focusedBackButton}
+              type="button"
+              onClick={showWorkoutOverview}
+            >
+              <ArrowLeft className={styles.icon} aria-hidden="true" />
+              <span>{messages.backToWorkoutAction}</span>
+            </button>
+            <span className={styles.focusedPosition}>
+              {formatExercisePosition(focusedExerciseIndex + 1, sessionExercises.length, messages)}
+            </span>
+            <button
+              className={styles.focusedFinishButton}
+              type="button"
+              disabled={isPersistingWorkout}
+              onClick={openFinishReview}
+            >
+              {isFinishing ? messages.finishingAction : messages.finishAction}
+            </button>
+          </header>
+
+          <section className={styles.focusedHero}>
+            <div className={styles.focusedHeroMeta}>
+              <p>{messages.currentExerciseLabel}</p>
+              <span className={styles.focusedSaveStatus} aria-live="polite">
+                <Cloud aria-hidden="true" />
+                {isPersistingWorkout ? messages.savingOfflineShort : messages.savedOfflineShort}
+              </span>
+            </div>
+            <h1 id="focused-exercise-title">{focusedExercise?.name ?? messages.missingExercise}</h1>
+          </section>
+
+          {focusedPreviousSet ? (
+            <section className={styles.referenceGrid} aria-label={messages.referenceDataLabel}>
+              <button
+                className={styles.referenceCard}
+                type="button"
+                onClick={() =>
+                  copyPreviousSet(focusedSessionExercise.exerciseId, focusedPreviousSet)
+                }
+              >
+                <span>
+                  <small>{messages.previousSetLabel}</small>
+                  <strong>{formatLastSessionSet(focusedPreviousSet, messages)}</strong>
+                </span>
+                <span className={styles.referenceCopyAction}>
+                  {messages.usePreviousSetAction}
+                  <Copy aria-hidden="true" />
+                </span>
+              </button>
+            </section>
+          ) : null}
+
+          {pendingEffortTarget?.exerciseId === focusedSessionExercise.exerciseId ? (
+            <section className={styles.effortCheckIn} aria-labelledby="effort-check-in-title">
+              <span className={styles.effortCompleteIcon}>
+                <Check aria-hidden="true" />
+              </span>
+              <div className={styles.effortHeading}>
+                <h2 id="effort-check-in-title">{messages.effortCheckInTitle}</h2>
+                <p>{messages.effortCheckInQuestion}</p>
+              </div>
+              <div
+                className={styles.effortScale}
+                role="group"
+                aria-label={messages.effortScaleLabel}
+              >
+                {([1, 2, 3, 4, 5] as const).map((rating) => (
+                  <button
+                    className={styles.effortButton}
+                    type="button"
+                    key={rating}
+                    disabled={isSavingEffort}
+                    aria-label={messages.effortRatingLabel.replace("{rating}", String(rating))}
+                    onClick={() => void savePendingEffort(rating)}
+                  >
+                    {rating}
+                  </button>
+                ))}
+              </div>
+              <div className={styles.effortScaleLabels} aria-hidden="true">
+                <span>{messages.effortEasyLabel}</span>
+                <span>{messages.effortMaximumLabel}</span>
+              </div>
+              <button
+                className={styles.effortSkipButton}
+                type="button"
+                disabled={isSavingEffort}
+                onClick={() => setPendingEffortTarget(null)}
+              >
+                {messages.effortSkipAction}
+              </button>
+            </section>
+          ) : (
+            <form
+              className={styles.focusedSetForm}
+              onSubmit={(event) => void logWorkoutSet(event, focusedSessionExercise)}
+            >
+              <div className={styles.focusedSetHeading}>
+                <span>{messages.nextSetTitle}</span>
+                <strong>
+                  {formatNextSetPosition(
+                    focusedCompletedSetCount,
+                    focusedSessionExercise.targetSets,
+                    messages,
+                  )}
+                </strong>
+              </div>
+              <div className={styles.focusedSetFields}>
+                {focusedExercise?.trackingMode !== "bodyweight" ? (
+                  <label className={styles.focusedSetField}>
+                    <span>
+                      {focusedExercise?.trackingMode === "assisted"
+                        ? messages.assistanceLabel
+                        : messages.weightLabel}
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={focusedSetDraft.weight}
+                      placeholder={messages.weightPlaceholder}
+                      onChange={(event) =>
+                        updateSetDraft(
+                          focusedSessionExercise.exerciseId,
+                          "weight",
+                          event.currentTarget.value,
+                        )
+                      }
+                    />
+                    <small>{settings?.weightUnit ?? "kg"}</small>
+                  </label>
+                ) : null}
+                <label className={styles.focusedSetField}>
+                  <span>
+                    {focusedExercise?.trackingMode === "timed"
+                      ? messages.durationLabel
+                      : messages.repsLabel}
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={
+                      focusedExercise?.trackingMode === "timed"
+                        ? focusedSetDraft.durationSeconds
+                        : focusedSetDraft.reps
+                    }
+                    placeholder={
+                      focusedExercise?.trackingMode === "timed"
+                        ? messages.durationPlaceholder
+                        : messages.repsPlaceholder
+                    }
+                    onChange={(event) =>
+                      updateSetDraft(
+                        focusedSessionExercise.exerciseId,
+                        focusedExercise?.trackingMode === "timed" ? "durationSeconds" : "reps",
+                        event.currentTarget.value,
+                      )
+                    }
+                  />
+                  <small>
+                    {focusedExercise?.trackingMode === "timed"
+                      ? messages.secondsUnit
+                      : messages.repetitionsUnit}
+                  </small>
+                </label>
+              </div>
+              <label className={styles.focusedRestField}>
+                <span>{messages.restAfterSetLabel}</span>
+                <span className={styles.focusedRestInput}>
+                  <Timer aria-hidden="true" />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={focusedSetDraft.restSeconds}
+                    placeholder={String(
+                      focusedSessionExercise.restSeconds ?? messages.restSecondsPlaceholder,
+                    )}
+                    onChange={(event) =>
+                      updateSetDraft(
+                        focusedSessionExercise.exerciseId,
+                        "restSeconds",
+                        event.currentTarget.value,
+                      )
+                    }
+                  />
+                  <small>{messages.secondsUnit}</small>
+                </span>
+              </label>
+              <button
+                className={styles.completeSetButton}
+                type="submit"
+                disabled={savingSetExerciseId === focusedSessionExercise.exerciseId}
+              >
+                <CheckCircle2 aria-hidden="true" />
+                <span>
+                  {savingSetExerciseId === focusedSessionExercise.exerciseId
+                    ? messages.completingSetAction
+                    : messages.completeSetAction}
+                </span>
+              </button>
+            </form>
+          )}
+
+          {focusedSets.length > 0 ? (
+            <section className={styles.completedSetsSection} aria-labelledby="completed-sets-title">
+              <div className={styles.sectionHeader}>
+                <h2 className={styles.sectionTitle} id="completed-sets-title">
+                  {messages.completedSetsTitle}
+                </h2>
+                <span className={styles.completedSetCount}>{focusedCompletedSetCount}</span>
+              </div>
+              <ol className={styles.focusedSetList}>
+                {focusedSets.map((set) => (
+                  <li className={styles.focusedSetRow} key={set.id}>
+                    <span className={styles.focusedSetNumber}>{set.order + 1}</span>
+                    <span className={styles.focusedSetSummary}>
+                      {formatLastSessionSet(set, messages)}
+                    </span>
+                    {set.effortRating ? (
+                      <span
+                        className={styles.effortBadge}
+                        aria-label={messages.effortRatingLabel.replace(
+                          "{rating}",
+                          String(set.effortRating),
+                        )}
+                      >
+                        <Flame aria-hidden="true" />
+                        {set.effortRating}
+                      </span>
+                    ) : null}
+                    <button
+                      className={styles.setActionButton}
+                      type="button"
+                      aria-label={formatSetActionLabel(
+                        messages.setSettingsAriaLabel,
+                        set,
+                        focusedExercise?.name ?? messages.missingExercise,
+                      )}
+                      onClick={() => openSetSettings(focusedSessionExercise, set)}
+                    >
+                      <MoreVertical className={styles.setActionIcon} aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          ) : null}
+
+          <nav className={styles.exercisePager} aria-label={messages.exerciseNavigationLabel}>
+            <button
+              type="button"
+              disabled={!previousSessionExercise}
+              onClick={() => {
+                if (previousSessionExercise) {
+                  focusExercise(previousSessionExercise.exerciseId);
+                }
+              }}
+            >
+              <ChevronLeft aria-hidden="true" />
+              <span>
+                <small>{messages.previousExerciseAction}</small>
+                <strong>{previousExerciseName ?? messages.noPreviousExercise}</strong>
+              </span>
+            </button>
+            <button
+              type="button"
+              disabled={!nextSessionExercise}
+              onClick={() => {
+                if (nextSessionExercise) {
+                  focusExercise(nextSessionExercise.exerciseId);
+                }
+              }}
+            >
+              <span>
+                <small>{messages.nextExerciseAction}</small>
+                <strong>{nextExerciseName ?? messages.noNextExercise}</strong>
+              </span>
+              <ChevronRight aria-hidden="true" />
+            </button>
+          </nav>
+        </article>
+      ) : null}
+
+      {isActive && activeRestTimer && !isFinishReviewOpen ? (
+        <div className={styles.restTimerPill({ focused: isWorkoutFocused })}>
           <div className={styles.restTimerPillMain} aria-live="polite">
             <Timer className={styles.restTimerPillIcon} aria-hidden="true" />
             <span className={styles.restTimerPillLabel}>
@@ -1913,6 +2217,12 @@ export const ActiveWorkoutScreen = ({
                         <span className={styles.exerciseName}>{exercise.name}</span>
                         <span className={styles.exerciseMeta}>
                           {exercise.equipment ?? messages.noEquipment}
+                          {exercise.confidenceRating
+                            ? ` · ${messages.exerciseConfidence.replace(
+                                "{rating}",
+                                String(exercise.confidenceRating),
+                              )}`
+                            : null}
                         </span>
                       </div>
                       <button
@@ -2031,6 +2341,34 @@ export const ActiveWorkoutScreen = ({
                       />
                     </label>
                   </div>
+
+                  <fieldset className={styles.effortEditField}>
+                    <legend>{messages.effortFieldLabel}</legend>
+                    <div className={styles.effortEditScale}>
+                      {([1, 2, 3, 4, 5] as const).map((rating) => (
+                        <button
+                          className={styles.effortEditButton({
+                            selected: setEditDraft.effortRating === rating,
+                          })}
+                          type="button"
+                          key={rating}
+                          aria-pressed={setEditDraft.effortRating === rating}
+                          aria-label={messages.effortRatingLabel.replace(
+                            "{rating}",
+                            String(rating),
+                          )}
+                          onClick={() =>
+                            updateSetEditEffort(
+                              setEditDraft.effortRating === rating ? null : rating,
+                            )
+                          }
+                        >
+                          {rating}
+                        </button>
+                      ))}
+                    </div>
+                    <span>{messages.effortFieldHint}</span>
+                  </fieldset>
 
                   <div className={styles.formActions}>
                     <button

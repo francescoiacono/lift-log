@@ -3,7 +3,9 @@ import type {
   ActiveRestTimer,
   ActiveWorkout,
   EntityId,
+  ExerciseConfidenceRating,
   IsoDateTime,
+  SetEffortRating,
   WeightUnit,
   WorkoutSet,
   WorkoutSession,
@@ -40,6 +42,12 @@ export type CreateWorkoutTemplateFromSessionInput = {
   name: string;
 };
 
+/** Data supplied when an active workout is finalized. */
+export type FinishActiveWorkoutInput = {
+  /** Latest exercise-confidence values selected during the finish review. */
+  confidenceRatings?: Partial<Record<EntityId, ExerciseConfidenceRating | null>>;
+};
+
 /** Result of saving an ad-hoc active workout as a reusable template. */
 export type CreateActiveWorkoutTemplateResult = {
   /** Updated active workout snapshot linked to the new template. */
@@ -66,6 +74,9 @@ export type LogWorkoutSetInput = {
   /** Rest duration planned after the set. */
   restSeconds?: number | null;
 
+  /** Optional subjective effort from easy (1) to maximum (5). */
+  effortRating?: SetEffortRating | null;
+
   /** Optional notes for the logged set. */
   notes?: string | null;
 };
@@ -86,6 +97,9 @@ export type UpdateWorkoutSetInput = {
 
   /** Rest duration planned after the set. */
   restSeconds?: number | null;
+
+  /** Optional subjective effort from easy (1) to maximum (5). */
+  effortRating?: SetEffortRating | null;
 
   /** Optional notes for the logged set. */
   notes?: string | null;
@@ -169,8 +183,8 @@ export type WorkoutSessionRepository = {
   /** Clears the active rest timer for the current workout session. */
   clearRestTimer: (sessionId: EntityId) => Promise<ActiveWorkoutSnapshot | undefined>;
 
-  /** Marks the active workout session as finished and clears the active pointer. */
-  finishActive: () => Promise<WorkoutSession | undefined>;
+  /** Atomically saves confidence changes, finishes the session, and clears the active pointer. */
+  finishActive: (input?: FinishActiveWorkoutInput) => Promise<WorkoutSession | undefined>;
 
   /** Marks the active workout session as discarded and clears the active pointer. */
   discardActive: () => Promise<WorkoutSession | undefined>;
@@ -258,6 +272,7 @@ const createCompletedWorkoutSet = (
     isCompleted: true,
     completedAt: timestamp,
     restSeconds: input.restSeconds ?? null,
+    effortRating: input.effortRating ?? null,
     notes: normalizeOptionalText(input.notes),
   };
 };
@@ -271,6 +286,8 @@ const updateCompletedWorkoutSet = (set: WorkoutSet, input: UpdateWorkoutSetInput
     weight: input.weight ?? null,
     weightUnit: input.weightUnit ?? set.weightUnit,
     restSeconds: input.restSeconds ?? null,
+    effortRating:
+      input.effortRating === undefined ? (set.effortRating ?? null) : input.effortRating,
     notes: normalizeOptionalText(input.notes),
   };
 };
@@ -864,12 +881,13 @@ export const createWorkoutSessionRepository = ({
       );
     },
 
-    /** Marks the active workout session as finished and clears the active pointer. */
-    finishActive: async () => {
+    /** Atomically saves confidence changes, finishes the session, and clears the active pointer. */
+    finishActive: async (input = {}) => {
       return database.transaction(
         "rw",
         database.workoutSessions,
         database.activeWorkout,
+        database.exercises,
         async () => {
           const activeWorkout = await getActiveSnapshot(database);
 
@@ -878,6 +896,25 @@ export const createWorkoutSessionRepository = ({
           }
 
           const timestamp = now();
+
+          for (const sessionExercise of activeWorkout.session.exercises) {
+            const confidenceRating = input.confidenceRatings?.[sessionExercise.exerciseId];
+
+            if (confidenceRating === undefined) {
+              continue;
+            }
+
+            const exercise = await database.exercises.get(sessionExercise.exerciseId);
+
+            if (exercise && (exercise.confidenceRating ?? null) !== confidenceRating) {
+              await database.exercises.put({
+                ...exercise,
+                confidenceRating,
+                updatedAt: timestamp,
+              });
+            }
+          }
+
           const workoutSession: WorkoutSession = {
             ...activeWorkout.session,
             status: "finished",

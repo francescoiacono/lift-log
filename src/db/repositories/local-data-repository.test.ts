@@ -33,6 +33,7 @@ const exercise = {
   muscleGroups: ["chest"],
   equipment: "Barbell",
   trackingMode: "weighted",
+  confidenceRating: null,
   notes: null,
   createdAt: "2026-05-07T10:00:00.000Z",
   updatedAt: "2026-05-07T10:00:00.000Z",
@@ -153,13 +154,41 @@ describe("createLocalDataRepository", () => {
           name: exercise.name,
           muscleGroups: ["Deltoids", "triceps", "Triceps"],
           equipment: exercise.equipment,
+          confidenceRating: 99,
           notes: exercise.notes,
           createdAt: exercise.createdAt,
           updatedAt: exercise.updatedAt,
         },
       ],
       workoutTemplates: [],
-      workoutSessions: [],
+      workoutSessions: [
+        {
+          ...workoutSession,
+          exercises: [
+            {
+              exerciseId: exercise.id,
+              order: 0,
+              targetSets: 1,
+              restSeconds: 120,
+              notes: null,
+              sets: [
+                {
+                  id: "legacy-set",
+                  order: 0,
+                  reps: 8,
+                  weight: 80,
+                  weightUnit: "kg",
+                  isCompleted: true,
+                  completedAt: "2026-05-07T10:08:00.000Z",
+                  restSeconds: 120,
+                  effortRating: 99,
+                  notes: null,
+                },
+              ],
+            },
+          ],
+        },
+      ],
       settings: [
         {
           id: appSettingsId,
@@ -177,9 +206,13 @@ describe("createLocalDataRepository", () => {
     await expect(testDatabase.exercises.get(exercise.id)).resolves.toMatchObject({
       muscleGroups: ["shoulders", "triceps"],
       trackingMode: "weighted",
+      confidenceRating: null,
     });
     await expect(testDatabase.settings.get(appSettingsId)).resolves.toMatchObject({
       weeklyWorkoutTarget: 3,
+    });
+    await expect(testDatabase.workoutSessions.get(workoutSession.id)).resolves.toMatchObject({
+      exercises: [{ sets: [{ id: "legacy-set", effortRating: null }] }],
     });
   });
 

@@ -1,6 +1,12 @@
 import { db as defaultDatabase, type LiftLogDatabase } from "../database";
 import { normalizeMuscleGroupIds } from "../exercise-semantics";
-import type { EntityId, Exercise, ExerciseTrackingMode, IsoDateTime } from "../entities";
+import type {
+  EntityId,
+  Exercise,
+  ExerciseConfidenceRating,
+  ExerciseTrackingMode,
+  IsoDateTime,
+} from "../entities";
 import { createEntityId, createIsoDateTime } from "../persistence-utils";
 
 /** Data required to create an exercise record. */
@@ -16,6 +22,9 @@ export type CreateExerciseInput = {
 
   /** How sets are entered and compared for progress. */
   trackingMode?: ExerciseTrackingMode;
+
+  /** Confidence performing the exercise, when rated. */
+  confidenceRating?: ExerciseConfidenceRating | null;
 
   /** Optional user notes for setup, cues, or substitutions. */
   notes?: string | null;
@@ -34,6 +43,9 @@ export type UpdateExerciseInput = {
 
   /** How sets are entered and compared for progress. */
   trackingMode?: ExerciseTrackingMode;
+
+  /** Confidence performing the exercise, when rated. */
+  confidenceRating?: ExerciseConfidenceRating | null;
 
   /** Optional user notes for setup, cues, or substitutions. */
   notes?: string | null;
@@ -77,9 +89,17 @@ const toNullableText = (value: string | null | undefined): string | null => {
 /** Builds a partial exercise patch while ignoring omitted update fields. */
 const toExercisePatch = (
   input: UpdateExerciseInput,
-): Partial<Pick<Exercise, "equipment" | "muscleGroups" | "name" | "notes" | "trackingMode">> => {
+): Partial<
+  Pick<
+    Exercise,
+    "confidenceRating" | "equipment" | "muscleGroups" | "name" | "notes" | "trackingMode"
+  >
+> => {
   const patch: Partial<
-    Pick<Exercise, "equipment" | "muscleGroups" | "name" | "notes" | "trackingMode">
+    Pick<
+      Exercise,
+      "confidenceRating" | "equipment" | "muscleGroups" | "name" | "notes" | "trackingMode"
+    >
   > = {};
 
   if (input.name !== undefined) {
@@ -96,6 +116,10 @@ const toExercisePatch = (
 
   if (input.trackingMode !== undefined) {
     patch.trackingMode = input.trackingMode;
+  }
+
+  if (input.confidenceRating !== undefined) {
+    patch.confidenceRating = input.confidenceRating;
   }
 
   if (input.notes !== undefined) {
@@ -131,6 +155,7 @@ export const createExerciseRepository = ({
         muscleGroups: normalizeMuscleGroupIds(input.muscleGroups),
         equipment: toNullableText(input.equipment),
         trackingMode: input.trackingMode ?? "weighted",
+        confidenceRating: input.confidenceRating ?? null,
         notes: toNullableText(input.notes),
         createdAt: timestamp,
         updatedAt: timestamp,

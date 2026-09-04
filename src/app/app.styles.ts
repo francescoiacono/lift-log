@@ -1,11 +1,21 @@
 import { css, cva } from "styled-system/css";
 
 export const styles = {
-  shell: css({
-    boxSizing: "border-box",
-    minBlockSize: "100svh",
-    paddingBlockEnd: { base: "calc(84px + env(safe-area-inset-bottom))", md: "16px" },
-    backgroundColor: "bg",
+  shell: cva({
+    base: {
+      boxSizing: "border-box",
+      minBlockSize: "100svh",
+      backgroundColor: "bg",
+    },
+    variants: {
+      focusedWorkout: {
+        true: { paddingBlockEnd: "0" },
+        false: {
+          paddingBlockEnd: { base: "calc(84px + env(safe-area-inset-bottom))", md: "16px" },
+        },
+      },
+    },
+    defaultVariants: { focusedWorkout: false },
   }),
   globalActions: css({
     position: "fixed",

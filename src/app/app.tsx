@@ -26,15 +26,18 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
   const [dataResetVersion, setDataResetVersion] = useState(0);
   const [initialWorkoutFeedback, setInitialWorkoutFeedback] = useState<string | null>(null);
   const [selectedExerciseId, setSelectedExerciseId] = useState<EntityId | null>(null);
+  const [isWorkoutFocused, setIsWorkoutFocused] = useState(false);
   const isExercisesActive = activeView === "exercises";
   const isHistoryActive = activeView === "history";
   const isSessionsActive = activeView === "sessions";
   const isWorkoutsActive = activeView === "workouts";
+  const isFocusedWorkoutView = isSessionsActive && isWorkoutFocused;
 
   /** Moves the app back to a fresh workout start state after local data is reset. */
   const handleLocalDataReset = () => {
     setInitialWorkoutFeedback(messages.settings.resetSuccess);
     setSelectedExerciseId(null);
+    setIsWorkoutFocused(false);
     setDataResetVersion((currentVersion) => currentVersion + 1);
     setActiveView("sessions");
   };
@@ -43,54 +46,59 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
   const handleLocalDataImported = () => {
     setInitialWorkoutFeedback(messages.settings.importSuccess);
     setSelectedExerciseId(null);
+    setIsWorkoutFocused(false);
     setDataResetVersion((currentVersion) => currentVersion + 1);
     setActiveView("sessions");
   };
 
   return (
-    <main className={styles.shell}>
-      <div className={styles.globalActions}>
-        <LocalDataSettings
-          messages={messages.settings}
-          onDataReset={handleLocalDataReset}
-          onDataImported={handleLocalDataImported}
-        />
-      </div>
+    <main className={styles.shell({ focusedWorkout: isFocusedWorkoutView })}>
+      {!isFocusedWorkoutView ? (
+        <div className={styles.globalActions}>
+          <LocalDataSettings
+            messages={messages.settings}
+            onDataReset={handleLocalDataReset}
+            onDataImported={handleLocalDataImported}
+          />
+        </div>
+      ) : null}
 
-      <nav className={styles.navigation} aria-label={messages.app.navigationLabel}>
-        <button
-          className={styles.navigationButton({ selected: activeView === "sessions" })}
-          type="button"
-          onClick={() => setActiveView("sessions")}
-        >
-          <House className={styles.navigationIcon} aria-hidden="true" />
-          <span>{messages.app.sessionsNav}</span>
-        </button>
-        <button
-          className={styles.navigationButton({ selected: activeView === "history" })}
-          type="button"
-          onClick={() => setActiveView("history")}
-        >
-          <ChartNoAxesCombined className={styles.navigationIcon} aria-hidden="true" />
-          <span>{messages.app.historyNav}</span>
-        </button>
-        <button
-          className={styles.navigationButton({ selected: activeView === "exercises" })}
-          type="button"
-          onClick={() => setActiveView("exercises")}
-        >
-          <Dumbbell className={styles.navigationIcon} aria-hidden="true" />
-          <span>{messages.app.exercisesNav}</span>
-        </button>
-        <button
-          className={styles.navigationButton({ selected: activeView === "workouts" })}
-          type="button"
-          onClick={() => setActiveView("workouts")}
-        >
-          <ClipboardList className={styles.navigationIcon} aria-hidden="true" />
-          <span>{messages.app.workoutsNav}</span>
-        </button>
-      </nav>
+      {!isFocusedWorkoutView ? (
+        <nav className={styles.navigation} aria-label={messages.app.navigationLabel}>
+          <button
+            className={styles.navigationButton({ selected: activeView === "sessions" })}
+            type="button"
+            onClick={() => setActiveView("sessions")}
+          >
+            <House className={styles.navigationIcon} aria-hidden="true" />
+            <span>{messages.app.sessionsNav}</span>
+          </button>
+          <button
+            className={styles.navigationButton({ selected: activeView === "history" })}
+            type="button"
+            onClick={() => setActiveView("history")}
+          >
+            <ChartNoAxesCombined className={styles.navigationIcon} aria-hidden="true" />
+            <span>{messages.app.historyNav}</span>
+          </button>
+          <button
+            className={styles.navigationButton({ selected: activeView === "exercises" })}
+            type="button"
+            onClick={() => setActiveView("exercises")}
+          >
+            <Dumbbell className={styles.navigationIcon} aria-hidden="true" />
+            <span>{messages.app.exercisesNav}</span>
+          </button>
+          <button
+            className={styles.navigationButton({ selected: activeView === "workouts" })}
+            type="button"
+            onClick={() => setActiveView("workouts")}
+          >
+            <ClipboardList className={styles.navigationIcon} aria-hidden="true" />
+            <span>{messages.app.workoutsNav}</span>
+          </button>
+        </nav>
+      ) : null}
 
       <div hidden={!isExercisesActive}>
         <ExerciseLibrary
@@ -130,6 +138,7 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           messages={messages.sessions}
           onInitialFeedbackShown={() => setInitialWorkoutFeedback(null)}
           onOpenHistory={() => setActiveView("history")}
+          onWorkoutFocusChange={setIsWorkoutFocused}
         />
       </div>
     </main>

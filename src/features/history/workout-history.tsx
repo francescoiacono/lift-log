@@ -161,8 +161,13 @@ const formatLoggedSet = (set: WorkoutSet, messages: WorkoutHistoryMessages): str
     set.restSeconds === null
       ? messages.noRestLogged
       : messages.restValue.replace("{seconds}", String(set.restSeconds));
+  const effortLabel = set.effortRating
+    ? messages.effortValue.replace("{rating}", String(set.effortRating))
+    : null;
 
-  return `${setLabel} · ${repsLabel} · ${weightLabel} · ${restLabel}`;
+  return [setLabel, repsLabel, weightLabel, restLabel, effortLabel]
+    .filter((label): label is string => label !== null)
+    .join(" · ");
 };
 
 /** Formats a workout toggle label with the target session name. */

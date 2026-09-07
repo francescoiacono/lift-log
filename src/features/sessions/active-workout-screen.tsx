@@ -1844,6 +1844,16 @@ export const ActiveWorkoutScreen = ({
             <h1 id="focused-exercise-title">{focusedExercise?.name ?? messages.missingExercise}</h1>
           </section>
 
+          {focusedSessionExercise.notes?.trim() ? (
+            <section
+              className={styles.focusedExerciseNotes}
+              aria-labelledby="focused-exercise-notes-title"
+            >
+              <h2 id="focused-exercise-notes-title">{messages.exerciseNotesTitle}</h2>
+              <p>{focusedSessionExercise.notes}</p>
+            </section>
+          ) : null}
+
           {focusedPreviousSet ? (
             <section className={styles.referenceGrid} aria-label={messages.referenceDataLabel}>
               <button

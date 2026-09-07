@@ -1,425 +1,297 @@
-import * as AlertDialog from "@radix-ui/react-alert-dialog";
-import * as Dialog from "@radix-ui/react-dialog";
-import { Check, CirclePlus, ClipboardList, Pencil, Play, Trash2, X } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ChevronRight,
+  CirclePlus,
+  ClipboardList,
+  Copy,
+  History,
+  MoreHorizontal,
+  Pencil,
+  Play,
+  Trash2,
+} from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
+import { styles as controls } from "./workout-plan-controls.styles";
+import { PlanConfirmation, PlanDialog } from "./workout-plan-dialog";
+import { WorkoutPlanEditor } from "./workout-plan-editor";
+import {
+  createPlanDraft,
+  formatPlanSummary,
+  getLastPlanCompletions,
+  planMessage,
+  toPlanDraft,
+  type PlanDraft,
+  type PlanMessages,
+} from "./workout-plan-utils";
 import { styles } from "./workout-template-library.styles";
-import type {
-  EntityId,
-  Exercise,
-  ExerciseRepository,
-  WorkoutTemplate,
-  WorkoutTemplateExercise,
-  WorkoutSessionRepository,
-  WorkoutTemplateRepository,
+import {
+  createTemplateExerciseBlocks,
+  exerciseRepository,
+  workoutSessionRepository,
+  workoutTemplateRepository,
+  type ActiveWorkoutSnapshot,
+  type EntityId,
+  type Exercise,
+  type ExerciseRepository,
+  type WorkoutSession,
+  type WorkoutSessionRepository,
+  type WorkoutTemplate,
+  type WorkoutTemplateRepository,
 } from "@/db";
-import { exerciseRepository, workoutSessionRepository, workoutTemplateRepository } from "@/db";
-import type { Messages } from "@/i18n";
+import { defaultLocale } from "@/i18n";
 
-/** Message dictionary used by the workout template feature. */
-type WorkoutTemplateLibraryMessages = Messages["workouts"];
-
-/** Props for the workout template library feature. */
+/** Props for the local workout plan library. */
 export type WorkoutTemplateLibraryProps = {
-  /** Localized copy used by the workout template UI. */
-  messages: WorkoutTemplateLibraryMessages;
-
-  /** Whether the workout template library is the currently visible app view. */
+  /** Localized copy for the plan workflow. */
+  messages: PlanMessages;
+  /** Locale used to format workout completion dates. */
+  locale?: string;
+  /** Whether the plan library is currently visible. */
   isActive?: boolean;
-
-  /** Repository used to persist workout template records. */
+  /** Repository used to persist plans. */
   templateRepository?: WorkoutTemplateRepository;
-
-  /** Repository used to read selectable exercise records. */
+  /** Repository used to read available exercises. */
   exerciseStore?: ExerciseRepository;
-
-  /** Repository used to start active workout sessions from templates. */
+  /** Repository used to read history and start sessions. */
   sessionRepository?: WorkoutSessionRepository;
-
-  /** Called after a workout session has been started. */
+  /** Opens the workout screen after starting or resuming a session. */
   onSessionStarted?: () => void;
+  /** Opens the exercise library from empty states. */
+  onOpenExercises?: () => void;
 };
 
-/** Editable exercise planning state for a template entry. */
-type TemplateExerciseFormState = {
-  /** Selected exercise identifier. */
-  exerciseId: EntityId;
-
-  /** Target set count input value. */
-  targetSets: string;
-
-  /** Rest duration input value in seconds. */
-  restSeconds: string;
+/** Independent draft retained while navigating to the exercise library. */
+type EditorState = {
+  /** Initial draft for this editing instance. */
+  draft: PlanDraft;
+  /** Existing plan to update, or null when creating. */
+  templateId: EntityId | null;
 };
 
-/** Editable form state for create and edit workout template flows. */
-type TemplateFormState = {
-  /** Workout template name input value. */
-  name: string;
+/** Secondary library panels, separate from the unsaved editor. */
+type LibrarySheet =
+  | { /** Plan creation or history selection panel. */ kind: "create" | "history" }
+  | {
+      /** Plan-specific detail, action, or confirmation panel. */ kind:
+        | "details"
+        | "actions"
+        | "delete";
+      /** Plan being inspected or managed. */ template: WorkoutTemplate;
+    };
 
-  /** Selected exercise entries and planning fields. */
-  exercises: TemplateExerciseFormState[];
-};
-
-/** Async loading states used by the workout template library. */
-type LoadState = "loading" | "ready" | "error";
-
-/** Numeric exercise planning fields editable in the template form. */
-type TemplateExerciseNumberField = "restSeconds" | "targetSets";
-
-/** Creates an empty workout template form state. */
-const createEmptyFormState = (): TemplateFormState => {
-  return {
-    name: "",
-    exercises: [],
-  };
-};
-
-/** Formats a nullable integer for a controlled number input. */
-const formatOptionalInteger = (value: number | null): string => {
-  return value === null ? "" : String(value);
-};
-
-/** Converts a controlled number input into the nullable positive integer shape stored locally. */
-const toOptionalPositiveInteger = (value: string): number | null => {
-  const trimmedValue = value.trim();
-
-  if (trimmedValue.length === 0) {
-    return null;
-  }
-
-  const numericValue = Number(trimmedValue);
-
-  if (!Number.isFinite(numericValue) || numericValue <= 0) {
-    return null;
-  }
-
-  return Math.trunc(numericValue);
-};
-
-/** Converts a controlled number input into the nullable non-negative integer shape stored locally. */
-const toOptionalNonNegativeInteger = (value: string): number | null => {
-  const trimmedValue = value.trim();
-
-  if (trimmedValue.length === 0) {
-    return null;
-  }
-
-  const numericValue = Number(trimmedValue);
-
-  if (!Number.isFinite(numericValue) || numericValue < 0) {
-    return null;
-  }
-
-  return Math.trunc(numericValue);
-};
-
-/** Converts a persisted template into editable form state. */
-const toFormState = (template: WorkoutTemplate): TemplateFormState => {
-  return {
-    name: template.name,
-    exercises: [...template.exercises]
-      .sort((firstExercise, secondExercise) => firstExercise.order - secondExercise.order)
-      .map((exercise) => ({
-        exerciseId: exercise.exerciseId,
-        targetSets: formatOptionalInteger(exercise.targetSets),
-        restSeconds: formatOptionalInteger(exercise.restSeconds),
-      })),
-  };
-};
-
-/** Converts form state into ordered workout template exercise entries. */
-const toTemplateExercises = (formState: TemplateFormState): WorkoutTemplateExercise[] => {
-  return formState.exercises.map((exercise, order) => ({
-    exerciseId: exercise.exerciseId,
-    order,
-    targetSets: toOptionalPositiveInteger(exercise.targetSets),
-    restSeconds: toOptionalNonNegativeInteger(exercise.restSeconds),
-    notes: null,
-  }));
-};
-
-/** Formats a workout template action label with the target template name. */
-const formatTemplateActionLabel = (template: string, templateName: string): string => {
-  return template.replace("{name}", templateName);
-};
-
-/** Formats a count of exercises for a workout template card. */
-const formatExerciseCount = (count: number, messages: WorkoutTemplateLibraryMessages): string => {
-  return count === 1
-    ? messages.exerciseCountSingular
-    : messages.exerciseCountPlural.replace("{count}", String(count));
-};
-
-/** Formats planned sets and rest duration for a template exercise. */
-const formatExercisePlan = (
-  exercise: WorkoutTemplateExercise,
-  messages: WorkoutTemplateLibraryMessages,
-): string => {
-  const setText =
-    exercise.targetSets === null
-      ? messages.noTargetSets
-      : messages.targetSetCount.replace("{count}", String(exercise.targetSets));
-  const restText =
-    exercise.restSeconds === null
-      ? messages.noRest
-      : messages.restSecondsCount.replace("{seconds}", String(exercise.restSeconds));
-
-  return `${setText} · ${restText}`;
-};
-
-/** Root workout template feature with list, create, and edit flows. */
+/** Compact plan library with reusable drafts, history shortcuts, and active-workout recovery. */
 export const WorkoutTemplateLibrary = ({
   messages,
+  locale = defaultLocale,
   isActive = true,
   templateRepository = workoutTemplateRepository,
   exerciseStore = exerciseRepository,
   sessionRepository = workoutSessionRepository,
   onSessionStarted,
+  onOpenExercises,
 }: WorkoutTemplateLibraryProps) => {
+  const libraryId = useId();
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
-  const [loadState, setLoadState] = useState<LoadState>("loading");
-  const [formState, setFormState] = useState<TemplateFormState>(createEmptyFormState);
-  const [isFormOpen, setIsFormOpen] = useState(false);
-  const [editingTemplateId, setEditingTemplateId] = useState<EntityId | null>(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState<EntityId | null>(null);
-  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
-  const [startingTemplateId, setStartingTemplateId] = useState<EntityId | null>(null);
+  const [sessions, setSessions] = useState<WorkoutSession[]>([]);
+  const [activeWorkout, setActiveWorkout] = useState<ActiveWorkoutSnapshot | undefined>();
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [editor, setEditor] = useState<EditorState | null>(null);
+  const [sheet, setSheet] = useState<LibrarySheet | null>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [startingId, setStartingId] = useState<EntityId | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const actionInFlight = useRef(false);
+  const loadSequence = useRef(0);
+  const returnFocus = useRef<HTMLElement | null>(null);
+  const isSwitchingDialog = useRef(false);
+  const addPlanButton = useRef<HTMLButtonElement>(null);
+  const exerciseById = useMemo(
+    () => new Map(exercises.map((exercise) => [exercise.id, exercise])),
+    [exercises],
+  );
+  const lastCompletions = useMemo(() => getLastPlanCompletions(sessions), [sessions]);
+  const dateFormatter = useMemo(
+    () => new Intl.DateTimeFormat(locale, { dateStyle: "medium" }),
+    [locale],
+  );
+  const reusableSessions = useMemo(
+    () =>
+      sessions
+        .filter((session) => session.exercises.length > 0)
+        .sort(
+          (first, second) =>
+            Date.parse(second.finishedAt ?? second.startedAt) -
+            Date.parse(first.finishedAt ?? first.startedAt),
+        ),
+    [sessions],
+  );
 
-  const editingTemplate = useMemo(() => {
-    return templates.find((template) => template.id === editingTemplateId);
-  }, [editingTemplateId, templates]);
-
-  const exerciseById = useMemo(() => {
-    return new Map(exercises.map((exercise) => [exercise.id, exercise]));
-  }, [exercises]);
-
-  const selectedExerciseById = useMemo(() => {
-    return new Map(formState.exercises.map((exercise) => [exercise.exerciseId, exercise]));
-  }, [formState.exercises]);
-
-  const isEditing = editingTemplateId !== null;
-  const canOpenForm = exercises.length > 0;
-  const canSubmit = formState.name.trim().length > 0 && formState.exercises.length > 0;
-  const formFeedbackMessage = isFormOpen ? feedbackMessage : null;
-  const pageFeedbackMessage = isFormOpen ? null : feedbackMessage;
-
-  /** Refreshes templates and selectable exercises from IndexedDB. */
+  /** Refreshes library records and workout context without accepting stale requests. */
   const refreshData = useCallback(async () => {
+    const sequence = ++loadSequence.current;
     try {
-      const [nextTemplates, nextExercises] = await Promise.all([
+      const [nextTemplates, nextExercises, nextSessions, nextActive] = await Promise.all([
         templateRepository.list(),
         exerciseStore.list(),
+        sessionRepository.listFinished(),
+        sessionRepository.getActive(),
       ]);
-
+      if (sequence !== loadSequence.current) return;
       setTemplates(nextTemplates);
       setExercises(nextExercises);
+      setSessions(nextSessions);
+      setActiveWorkout(nextActive);
       setLoadState("ready");
     } catch {
-      setLoadState("error");
-      setFeedbackMessage(messages.loadError);
+      if (sequence === loadSequence.current) setLoadState("error");
     }
-  }, [exerciseStore, messages.loadError, templateRepository]);
+  }, [exerciseStore, sessionRepository, templateRepository]);
 
   useEffect(() => {
-    if (isActive) {
-      void refreshData();
-    }
+    if (isActive) void refreshData();
+    return () => {
+      loadSequence.current += 1;
+    };
   }, [isActive, refreshData]);
 
-  useEffect(() => {
-    if (isActive) {
-      return;
-    }
-
-    setFormState(createEmptyFormState());
-    setEditingTemplateId(null);
-    setPendingDeleteId(null);
-    setFeedbackMessage(null);
-    setIsFormOpen(false);
-  }, [isActive]);
-
-  /** Opens the form in create mode. */
-  const openCreateForm = () => {
-    if (!canOpenForm) {
-      setFeedbackMessage(messages.validationExercisesRequired);
-      return;
-    }
-
-    setFormState(createEmptyFormState());
-    setEditingTemplateId(null);
-    setPendingDeleteId(null);
-    setFeedbackMessage(null);
-    setIsFormOpen(true);
+  /** Opens a secondary panel and remembers the initiating action for focus restoration. */
+  const openSheet = (next: LibrarySheet, trigger: HTMLElement) => {
+    returnFocus.current = trigger;
+    isSwitchingDialog.current = false;
+    setFeedback(null);
+    setDeleteError(null);
+    setSheet(next);
   };
 
-  /** Opens the form in edit mode for an existing workout template. */
-  const openEditForm = (template: WorkoutTemplate) => {
-    setFormState(toFormState(template));
-    setEditingTemplateId(template.id);
-    setPendingDeleteId(null);
-    setFeedbackMessage(null);
-    setIsFormOpen(true);
+  /** Opens an independent draft without persisting a copy until the user saves. */
+  const beginEditor = (draft: PlanDraft, templateId: EntityId | null = null) => {
+    isSwitchingDialog.current = true;
+    setSheet(null);
+    setFeedback(null);
+    setEditor({ draft, templateId });
   };
 
-  /** Closes the form and clears unsaved form state. */
-  const closeForm = () => {
-    setFormState(createEmptyFormState());
-    setEditingTemplateId(null);
-    setFeedbackMessage(null);
-    setIsFormOpen(false);
-  };
-
-  /** Updates the controlled form dialog state. */
-  const updateFormDialog = (isOpen: boolean) => {
-    if (isOpen) {
-      setIsFormOpen(true);
-      return;
-    }
-
-    closeForm();
-  };
-
-  /** Updates the workout template name field. */
-  const updateTemplateName = (name: string) => {
-    setFormState((currentFormState) => ({
-      ...currentFormState,
-      name,
-    }));
-  };
-
-  /** Toggles an exercise in the current workout template form. */
-  const toggleExercise = (exerciseId: EntityId, isSelected: boolean) => {
-    setFormState((currentFormState) => {
-      if (!isSelected) {
-        return {
-          ...currentFormState,
-          exercises: currentFormState.exercises.filter(
-            (exercise) => exercise.exerciseId !== exerciseId,
-          ),
-        };
-      }
-
-      if (currentFormState.exercises.some((exercise) => exercise.exerciseId === exerciseId)) {
-        return currentFormState;
-      }
-
-      return {
-        ...currentFormState,
-        exercises: [
-          ...currentFormState.exercises,
-          {
-            exerciseId,
-            targetSets: "3",
-            restSeconds: "120",
-          },
-        ],
-      };
-    });
-  };
-
-  /** Updates one planning field for a selected exercise. */
-  const updateExercisePlanField = (
-    exerciseId: EntityId,
-    field: TemplateExerciseNumberField,
-    value: string,
-  ) => {
-    setFormState((currentFormState) => ({
-      ...currentFormState,
-      exercises: currentFormState.exercises.map((exercise) =>
-        exercise.exerciseId === exerciseId
-          ? {
-              ...exercise,
-              [field]: value,
-            }
-          : exercise,
+  /** Updates the list directly after saving so a refresh failure cannot cause duplicate creation. */
+  const handleSaved = (template: WorkoutTemplate) => {
+    loadSequence.current += 1;
+    setLoadState("ready");
+    setTemplates((current) =>
+      [...current.filter((value) => value.id !== template.id), template].sort((first, second) =>
+        first.name.localeCompare(second.name),
       ),
-    }));
+    );
+    setEditor(null);
+    setFeedback(messages.savedSuccess);
   };
 
-  /** Saves a new or edited workout template from the current form state. */
-  const saveTemplate = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  /** Avoids returning focus to the library while a replacement dialog is opening. */
+  const getSheetReturnFocus = () => (isSwitchingDialog.current ? null : returnFocus.current);
 
-    if (formState.name.trim().length === 0) {
-      setFeedbackMessage(messages.validationNameRequired);
+  /** Starts one plan at a time, retaining a route back to an existing active session. */
+  const startPlan = async (template: WorkoutTemplate) => {
+    if (actionInFlight.current) return;
+    if (
+      template.exercises.length === 0 ||
+      template.exercises.some((exercise) => !exerciseById.has(exercise.exerciseId))
+    ) {
+      setFeedback(messages.validationMissingExercises);
+      setSheet(null);
       return;
     }
-
-    if (formState.exercises.length === 0) {
-      setFeedbackMessage(messages.validationExercisesRequired);
-      return;
-    }
-
+    actionInFlight.current = true;
+    setStartingId(template.id);
+    setFeedback(null);
     try {
-      const input = {
-        name: formState.name.trim(),
-        exercises: toTemplateExercises(formState),
-      };
-
-      if (isEditing) {
-        if (!editingTemplate) {
-          setFeedbackMessage(messages.saveError);
-          return;
-        }
-
-        await templateRepository.update(editingTemplate.id, input);
-      } else {
-        await templateRepository.create(input);
-      }
-
-      await refreshData();
-      closeForm();
-    } catch {
-      setFeedbackMessage(messages.saveError);
-    }
-  };
-
-  /** Updates the controlled delete dialog state for a workout template row. */
-  const updateDeleteDialog = (isOpen: boolean, templateId: EntityId) => {
-    setPendingDeleteId(isOpen ? templateId : null);
-    setFeedbackMessage(null);
-  };
-
-  /** Deletes the confirmed workout template. */
-  const confirmDelete = async (templateId: EntityId) => {
-    try {
-      await templateRepository.deleteById(templateId);
-      setPendingDeleteId(null);
-      await refreshData();
-    } catch {
-      setFeedbackMessage(messages.deleteError);
-    }
-  };
-
-  /** Starts an active workout from an existing workout template. */
-  const startTemplateWorkout = async (templateId: EntityId) => {
-    setStartingTemplateId(templateId);
-    setFeedbackMessage(null);
-
-    try {
-      const existingWorkout = await sessionRepository.getActive();
-
-      if (existingWorkout) {
-        setFeedbackMessage(messages.activeWorkoutExists);
+      const existing = await sessionRepository.getActive();
+      if (existing) {
+        setActiveWorkout(existing);
+        setSheet(null);
+        if (existing.session.templateId === template.id) onSessionStarted?.();
+        else setFeedback(messages.activeWorkoutExists);
         return;
       }
-
-      const activeWorkout = await sessionRepository.startFromTemplate(templateId);
-
-      if (!activeWorkout || activeWorkout.session.templateId !== templateId) {
-        setFeedbackMessage(messages.startError);
+      const started = await sessionRepository.startFromTemplate(template.id);
+      if (!started) {
+        setFeedback(messages.startError);
+        setSheet(null);
         return;
       }
-
-      onSessionStarted?.();
+      setActiveWorkout(started);
+      setSheet(null);
+      if (started.session.templateId === template.id) onSessionStarted?.();
+      else setFeedback(messages.activeWorkoutExists);
     } catch {
-      setFeedbackMessage(messages.startError);
+      setFeedback(messages.startError);
+      setSheet(null);
     } finally {
-      setStartingTemplateId(null);
+      actionInFlight.current = false;
+      setStartingId(null);
     }
   };
+
+  /** Deletes only after confirmation, preserving the dialog and error on failure. */
+  const deletePlan = async (template: WorkoutTemplate) => {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await templateRepository.deleteById(template.id);
+      loadSequence.current += 1;
+      setTemplates((current) => current.filter((value) => value.id !== template.id));
+      setSheet(null);
+      returnFocus.current = addPlanButton.current;
+      setFeedback(messages.deletedSuccess);
+    } catch {
+      setDeleteError(messages.deleteError);
+    } finally {
+      actionInFlight.current = false;
+      setIsDeleting(false);
+    }
+  };
+
+  /** Formats only valid dates, including imported histories with incomplete timestamps. */
+  const formatDate = (timestamp: string): string =>
+    Number.isFinite(Date.parse(timestamp))
+      ? dateFormatter.format(new Date(timestamp))
+      : messages.unknownDate;
+
+  /** Formats the latest completion for a plan, independent of its last edit time. */
+  const lastCompletedLabel = (template: WorkoutTemplate): string => {
+    const timestamp = lastCompletions.get(template.id);
+    return timestamp
+      ? planMessage(messages.lastCompleted, { date: formatDate(timestamp) })
+      : messages.neverCompleted;
+  };
+
+  /** Checks whether a saved plan can start with the current local exercise library. */
+  const isStartUnavailable = (template: WorkoutTemplate): boolean =>
+    startingId !== null ||
+    Boolean(activeWorkout) ||
+    template.exercises.length === 0 ||
+    template.exercises.some((exercise) => !exerciseById.has(exercise.exerciseId));
+
+  /** Creates a short preview of the first exercises in actual workout order. */
+  const preview = (template: WorkoutTemplate): string => {
+    const names = [...template.exercises]
+      .sort((first, second) => first.order - second.order)
+      .slice(0, 2)
+      .map((exercise) => exerciseById.get(exercise.exerciseId)?.name ?? messages.missingExercise)
+      .join(", ");
+    return template.exercises.length > 2
+      ? planMessage(messages.previewMore, { names, count: template.exercises.length - 2 })
+      : names;
+  };
+
+  const selectedTemplate = sheet && "template" in sheet ? sheet.template : null;
+  const sheetTitle =
+    sheet?.kind === "create"
+      ? messages.formCreateTitle
+      : sheet?.kind === "history"
+        ? messages.fromHistoryAction
+        : (selectedTemplate?.name ?? messages.title);
 
   return (
     <section className={styles.root} aria-labelledby="workout-template-library-title">
@@ -429,309 +301,398 @@ export const WorkoutTemplateLibrary = ({
           <h1 className={styles.title} id="workout-template-library-title">
             {messages.title}
           </h1>
-          <p className={styles.description}>{messages.description}</p>
+          <p className={controls.muted}>{messages.description}</p>
         </div>
-        <div className={styles.headerActions}>
-          <div className={styles.countBadge} aria-label={messages.totalLabel}>
-            <span className={styles.countValue}>{templates.length}</span>
-            <span className={styles.countLabel}>{messages.totalLabel}</span>
-          </div>
-          <button
-            className={styles.button({ variant: "primary" })}
-            type="button"
-            disabled={!canOpenForm}
-            onClick={openCreateForm}
-          >
-            <CirclePlus className={styles.icon} aria-hidden="true" />
-            <span>{messages.addAction}</span>
-          </button>
-        </div>
+        <button
+          ref={addPlanButton}
+          className={controls.button({ variant: "primary" })}
+          type="button"
+          disabled={loadState !== "ready"}
+          onClick={(event) => openSheet({ kind: "create" }, event.currentTarget)}
+        >
+          <CirclePlus className={controls.icon} aria-hidden="true" />
+          {messages.addAction}
+        </button>
       </header>
 
-      {pageFeedbackMessage ? <p className={styles.feedback}>{pageFeedbackMessage}</p> : null}
-
-      <Dialog.Root open={isFormOpen} onOpenChange={updateFormDialog}>
-        <Dialog.Portal>
-          <Dialog.Overlay className={styles.dialogOverlay} />
-          <div className={styles.dialogViewport}>
-            <Dialog.Content className={styles.formDialogContent}>
-              <form className={styles.formPanel} onSubmit={saveTemplate}>
-                <div className={styles.formHeader}>
-                  <Dialog.Title className={styles.formTitle}>
-                    {isEditing ? messages.formEditTitle : messages.formCreateTitle}
-                  </Dialog.Title>
-                  <Dialog.Close asChild>
-                    <button className={styles.iconButton({ variant: "ghost" })} type="button">
-                      <X className={styles.icon} aria-hidden="true" />
-                      <span className={styles.visuallyHidden}>{messages.cancelAction}</span>
-                    </button>
-                  </Dialog.Close>
-                </div>
-
-                <Dialog.Description className={styles.visuallyHidden}>
-                  {messages.description}
-                </Dialog.Description>
-
-                {formFeedbackMessage ? (
-                  <p className={styles.feedback}>{formFeedbackMessage}</p>
-                ) : null}
-
-                <label className={styles.field}>
-                  <span className={styles.label}>{messages.nameLabel}</span>
-                  <input
-                    className={styles.input}
-                    value={formState.name}
-                    placeholder={messages.namePlaceholder}
-                    onChange={(event) => updateTemplateName(event.currentTarget.value)}
-                  />
-                </label>
-
-                <div className={styles.exercisePicker}>
-                  <h3 className={styles.sectionTitle}>{messages.exercisesSectionTitle}</h3>
-                  <ul className={styles.exerciseOptionList}>
-                    {exercises.map((exercise) => {
-                      const selectedExercise = selectedExerciseById.get(exercise.id);
-                      const isSelected = selectedExercise !== undefined;
-
-                      return (
-                        <li
-                          className={styles.exerciseOption({ selected: isSelected })}
-                          key={exercise.id}
-                        >
-                          <label className={styles.checkboxRow}>
-                            <input
-                              className={styles.checkbox}
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={(event) =>
-                                toggleExercise(exercise.id, event.currentTarget.checked)
-                              }
-                            />
-                            <span className={styles.exerciseSummary}>
-                              <span className={styles.exerciseName}>{exercise.name}</span>
-                              <span className={styles.exerciseMeta}>
-                                {exercise.equipment ?? messages.noEquipment}
-                                {exercise.confidenceRating
-                                  ? ` · ${messages.exerciseConfidence.replace(
-                                      "{rating}",
-                                      String(exercise.confidenceRating),
-                                    )}`
-                                  : null}
-                              </span>
-                            </span>
-                          </label>
-
-                          {selectedExercise ? (
-                            <div className={styles.planFields}>
-                              <label className={styles.compactField}>
-                                <span className={styles.label}>{messages.targetSetsLabel}</span>
-                                <input
-                                  className={styles.input}
-                                  type="text"
-                                  inputMode="numeric"
-                                  pattern="[0-9]*"
-                                  value={selectedExercise.targetSets}
-                                  onChange={(event) =>
-                                    updateExercisePlanField(
-                                      exercise.id,
-                                      "targetSets",
-                                      event.currentTarget.value,
-                                    )
-                                  }
-                                />
-                              </label>
-                              <label className={styles.compactField}>
-                                <span className={styles.label}>{messages.restSecondsLabel}</span>
-                                <input
-                                  className={styles.input}
-                                  type="text"
-                                  inputMode="numeric"
-                                  pattern="[0-9]*"
-                                  value={selectedExercise.restSeconds}
-                                  onChange={(event) =>
-                                    updateExercisePlanField(
-                                      exercise.id,
-                                      "restSeconds",
-                                      event.currentTarget.value,
-                                    )
-                                  }
-                                />
-                              </label>
-                            </div>
-                          ) : null}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-
-                <div className={styles.formActions}>
-                  <button
-                    className={styles.button({ variant: "primary" })}
-                    type="submit"
-                    disabled={!canSubmit}
-                  >
-                    <Check className={styles.icon} aria-hidden="true" />
-                    <span>{isEditing ? messages.saveEditAction : messages.saveCreateAction}</span>
-                  </button>
-                  <Dialog.Close asChild>
-                    <button className={styles.button({ variant: "secondary" })} type="button">
-                      {messages.cancelAction}
-                    </button>
-                  </Dialog.Close>
-                </div>
-              </form>
-            </Dialog.Content>
-          </div>
-        </Dialog.Portal>
-      </Dialog.Root>
-
-      {loadState === "ready" && exercises.length === 0 ? (
+      {feedback ? (
+        <p className={controls.feedback} role="status">
+          {feedback}
+        </p>
+      ) : null}
+      {loadState === "loading" ? (
+        <p className={controls.muted} role="status">
+          {messages.loadingLabel}
+        </p>
+      ) : null}
+      {loadState === "error" ? (
         <div className={styles.emptyState}>
-          <ClipboardList className={styles.emptyIcon} aria-hidden="true" />
-          <h2 className={styles.emptyTitle}>{messages.noExercisesTitle}</h2>
-          <p className={styles.emptyDescription}>{messages.noExercisesDescription}</p>
+          <p className={controls.feedback} role="alert">
+            {messages.loadError}
+          </p>
+          <button
+            className={controls.button()}
+            type="button"
+            onClick={() => {
+              setLoadState("loading");
+              void refreshData();
+            }}
+          >
+            {messages.retryAction}
+          </button>
         </div>
       ) : null}
-
-      {loadState === "ready" && exercises.length > 0 && templates.length === 0 ? (
+      {loadState === "ready" && activeWorkout ? (
+        <div className={styles.resumeBanner}>
+          <div>
+            <p className={styles.sectionTitle}>{messages.activeWorkoutTitle}</p>
+            <p className={controls.muted}>
+              {activeWorkout.session.name ?? messages.unnamedWorkout}
+            </p>
+          </div>
+          <button
+            className={controls.button({ variant: "primary" })}
+            type="button"
+            onClick={onSessionStarted}
+          >
+            <Play className={controls.icon} aria-hidden="true" />
+            {messages.resumeAction}
+          </button>
+        </div>
+      ) : null}
+      {loadState === "ready" && templates.length === 0 ? (
         <div className={styles.emptyState}>
           <ClipboardList className={styles.emptyIcon} aria-hidden="true" />
-          <h2 className={styles.emptyTitle}>{messages.emptyTitle}</h2>
-          <p className={styles.emptyDescription}>{messages.emptyDescription}</p>
-          <button
-            className={styles.button({ variant: "primary" })}
-            type="button"
-            onClick={openCreateForm}
-          >
-            <CirclePlus className={styles.icon} aria-hidden="true" />
-            <span>{messages.addAction}</span>
-          </button>
+          <h2 className={styles.sectionTitle}>{messages.emptyTitle}</h2>
+          <p className={controls.muted}>
+            {exercises.length === 0 ? messages.noExercisesDescription : messages.emptyDescription}
+          </p>
+          <div className={styles.emptyActions}>
+            {exercises.length === 0 && onOpenExercises ? (
+              <button className={controls.button()} type="button" onClick={onOpenExercises}>
+                {messages.addExerciseAction}
+              </button>
+            ) : null}
+            {reusableSessions.length > 0 ? (
+              <button
+                className={controls.button()}
+                type="button"
+                onClick={(event) => openSheet({ kind: "history" }, event.currentTarget)}
+              >
+                <History className={controls.icon} aria-hidden="true" />
+                {messages.fromHistoryAction}
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
       {loadState === "ready" && templates.length > 0 ? (
-        <ul className={styles.templateList}>
-          {templates.map((template) => (
-            <li className={styles.templateCard} key={template.id}>
-              <div className={styles.templateContent}>
-                <div className={styles.templateHeading}>
-                  <h2 className={styles.templateName}>{template.name}</h2>
-                  <p className={styles.exerciseCount}>
-                    {formatExerciseCount(template.exercises.length, messages)}
-                  </p>
-                </div>
-
-                <ul className={styles.templateExerciseList}>
-                  {[...template.exercises]
-                    .sort(
-                      (firstExercise, secondExercise) => firstExercise.order - secondExercise.order,
-                    )
-                    .map((templateExercise) => {
-                      const exercise = exerciseById.get(templateExercise.exerciseId);
-
-                      return (
-                        <li
-                          className={styles.templateExercise}
-                          key={`${template.id}-${templateExercise.exerciseId}`}
-                        >
-                          <span className={styles.templateExerciseName}>
-                            {exercise?.name ?? messages.missingExercise}
-                          </span>
-                          <span className={styles.templateExercisePlan}>
-                            {formatExercisePlan(templateExercise, messages)}
-                          </span>
-                        </li>
-                      );
+        <>
+          <p className={styles.libraryCount}>
+            {planMessage(messages.libraryCount, { count: templates.length })}
+          </p>
+          <ul className={styles.templateList}>
+            {templates.map((template, index) => (
+              <li className={styles.templateCard} key={template.id}>
+                <h2>
+                  <button
+                    type="button"
+                    className={styles.cardOpen}
+                    aria-label={planMessage(messages.viewPlanAriaLabel, { name: template.name })}
+                    aria-describedby={`${libraryId}-summary-${index} ${libraryId}-preview-${index}`}
+                    onClick={(event) =>
+                      openSheet({ kind: "details", template }, event.currentTarget)
+                    }
+                  >
+                    <span className={styles.cardHeading}>
+                      <span className={styles.templateName}>{template.name}</span>
+                      <ChevronRight className={controls.icon} aria-hidden="true" />
+                    </span>
+                    <span className={styles.summary} id={`${libraryId}-summary-${index}`}>
+                      {formatPlanSummary(template.exercises, messages)}
+                    </span>
+                    <span className={styles.preview} id={`${libraryId}-preview-${index}`}>
+                      {preview(template)}
+                    </span>
+                  </button>
+                </h2>
+                <div className={styles.cardFooter}>
+                  <p className={styles.lastCompleted}>{lastCompletedLabel(template)}</p>
+                  <button
+                    className={controls.button({ variant: "primary" })}
+                    type="button"
+                    disabled={isStartUnavailable(template)}
+                    aria-label={planMessage(messages.startTemplateAriaLabel, {
+                      name: template.name,
                     })}
-                </ul>
-              </div>
+                    onClick={() => void startPlan(template)}
+                  >
+                    <Play className={controls.icon} aria-hidden="true" />
+                    {startingId === template.id ? messages.startingAction : messages.startAction}
+                  </button>
+                  <button
+                    className={controls.button({ variant: "ghost", square: true })}
+                    type="button"
+                    aria-label={planMessage(messages.planActionsAriaLabel, { name: template.name })}
+                    onClick={(event) =>
+                      openSheet({ kind: "actions", template }, event.currentTarget)
+                    }
+                  >
+                    <MoreHorizontal className={controls.icon} aria-hidden="true" />
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
 
-              <div className={styles.cardActions}>
+      {sheet && sheet.kind !== "delete" ? (
+        <PlanDialog
+          open={isActive}
+          onOpenChange={(open) => {
+            if (!open) setSheet(null);
+          }}
+          title={sheetTitle}
+          description={
+            sheet.kind === "history" ? messages.historyDescription : messages.description
+          }
+          closeLabel={messages.closeAction}
+          fullScreen={sheet.kind === "history"}
+          getReturnFocus={getSheetReturnFocus}
+          footer={
+            sheet.kind === "details" && selectedTemplate ? (
+              <>
                 <button
-                  aria-label={formatTemplateActionLabel(
-                    messages.startTemplateAriaLabel,
-                    template.name,
-                  )}
-                  className={styles.button({ variant: "primary" })}
+                  className={controls.button()}
                   type="button"
-                  disabled={startingTemplateId === template.id}
-                  onClick={() => void startTemplateWorkout(template.id)}
+                  onClick={() =>
+                    beginEditor(
+                      toPlanDraft(selectedTemplate.name, selectedTemplate.exercises),
+                      selectedTemplate.id,
+                    )
+                  }
                 >
-                  <Play className={styles.icon} aria-hidden="true" />
-                  <span>
-                    {startingTemplateId === template.id
+                  <Pencil className={controls.icon} aria-hidden="true" />
+                  {messages.editAction}
+                </button>
+                <button
+                  className={controls.button({ variant: "primary" })}
+                  type="button"
+                  disabled={!activeWorkout && isStartUnavailable(selectedTemplate)}
+                  onClick={() => {
+                    if (activeWorkout) {
+                      setSheet(null);
+                      onSessionStarted?.();
+                    } else {
+                      void startPlan(selectedTemplate);
+                    }
+                  }}
+                >
+                  <Play className={controls.icon} aria-hidden="true" />
+                  {activeWorkout
+                    ? messages.resumeAction
+                    : startingId === selectedTemplate.id
                       ? messages.startingAction
                       : messages.startAction}
-                  </span>
                 </button>
-                <button
-                  aria-label={formatTemplateActionLabel(
-                    messages.editTemplateAriaLabel,
-                    template.name,
-                  )}
-                  className={styles.iconButton({ variant: "secondary" })}
-                  type="button"
-                  onClick={() => openEditForm(template)}
-                >
-                  <Pencil className={styles.icon} aria-hidden="true" />
-                </button>
-                <AlertDialog.Root
-                  open={pendingDeleteId === template.id}
-                  onOpenChange={(isOpen) => updateDeleteDialog(isOpen, template.id)}
-                >
-                  <AlertDialog.Trigger asChild>
-                    <button
-                      aria-label={formatTemplateActionLabel(
-                        messages.deleteTemplateAriaLabel,
-                        template.name,
-                      )}
-                      className={styles.iconButton({ variant: "danger" })}
-                      type="button"
-                    >
-                      <Trash2 className={styles.icon} aria-hidden="true" />
-                    </button>
-                  </AlertDialog.Trigger>
-
-                  <AlertDialog.Portal>
-                    <AlertDialog.Overlay className={styles.dialogOverlay} />
-                    <div className={styles.dialogViewport}>
-                      <AlertDialog.Content className={styles.dialogContent}>
-                        <AlertDialog.Title className={styles.dialogTitle}>
-                          {messages.deleteConfirmTitle}
-                        </AlertDialog.Title>
-                        <AlertDialog.Description className={styles.dialogDescription}>
-                          <strong>{template.name}</strong>
-                          <span>{messages.deleteConfirmDescription}</span>
-                        </AlertDialog.Description>
-                        <div className={styles.dialogActions}>
-                          <AlertDialog.Action asChild>
-                            <button
-                              className={styles.button({ variant: "danger" })}
-                              type="button"
-                              onClick={() => void confirmDelete(template.id)}
-                            >
-                              <Trash2 className={styles.icon} aria-hidden="true" />
-                              <span>{messages.deleteConfirmAction}</span>
-                            </button>
-                          </AlertDialog.Action>
-                          <AlertDialog.Cancel asChild>
-                            <button
-                              className={styles.button({ variant: "secondary" })}
-                              type="button"
-                            >
-                              {messages.deleteCancelAction}
-                            </button>
-                          </AlertDialog.Cancel>
-                        </div>
-                      </AlertDialog.Content>
-                    </div>
-                  </AlertDialog.Portal>
-                </AlertDialog.Root>
-              </div>
-            </li>
-          ))}
-        </ul>
+              </>
+            ) : sheet.kind === "history" ? (
+              <button
+                className={controls.button()}
+                type="button"
+                onClick={() => setSheet({ kind: "create" })}
+              >
+                {messages.backAction}
+              </button>
+            ) : undefined
+          }
+        >
+          {sheet.kind === "create" ? (
+            <div className={styles.actionList}>
+              <button
+                className={styles.actionButton}
+                type="button"
+                onClick={() => beginEditor(createPlanDraft())}
+              >
+                <CirclePlus className={controls.icon} aria-hidden="true" />
+                <span>
+                  <strong>{messages.fromScratchAction}</strong>
+                  <span className={controls.muted}>{messages.fromScratchDescription}</span>
+                </span>
+                <ChevronRight className={controls.icon} aria-hidden="true" />
+              </button>
+              <button
+                className={styles.actionButton}
+                type="button"
+                onClick={() => setSheet({ kind: "history" })}
+              >
+                <History className={controls.icon} aria-hidden="true" />
+                <span>
+                  <strong>{messages.fromHistoryAction}</strong>
+                  <span className={controls.muted}>{messages.historyDescription}</span>
+                </span>
+                <ChevronRight className={controls.icon} aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
+          {sheet.kind === "history" ? (
+            <>
+              {reusableSessions.length === 0 ? (
+                <p className={controls.muted}>{messages.noHistoryDescription}</p>
+              ) : (
+                <ul className={styles.actionList}>
+                  {reusableSessions.map((session) => (
+                    <li key={session.id}>
+                      <button
+                        className={styles.actionButton}
+                        type="button"
+                        onClick={() =>
+                          beginEditor(
+                            toPlanDraft(
+                              session.name?.trim() || messages.unnamedWorkout,
+                              createTemplateExerciseBlocks(session.exercises),
+                            ),
+                          )
+                        }
+                      >
+                        <History className={controls.icon} aria-hidden="true" />
+                        <span>
+                          <strong>{session.name || messages.unnamedWorkout}</strong>
+                          <span className={controls.muted}>
+                            {planMessage(messages.historyWorkoutMeta, {
+                              date: formatDate(session.finishedAt ?? session.startedAt),
+                              count: session.exercises.length,
+                            })}
+                          </span>
+                        </span>
+                        <ChevronRight className={controls.icon} aria-hidden="true" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          ) : null}
+          {sheet.kind === "details" && selectedTemplate ? (
+            <>
+              <p className={controls.muted}>
+                {formatPlanSummary(selectedTemplate.exercises, messages)}
+              </p>
+              <p className={controls.muted}>{lastCompletedLabel(selectedTemplate)}</p>
+              {selectedTemplate.exercises.length === 0 ||
+              selectedTemplate.exercises.some(
+                (exercise) => !exerciseById.has(exercise.exerciseId),
+              ) ? (
+                <p className={controls.feedback}>{messages.missingExerciseHelp}</p>
+              ) : null}
+              <ol className={styles.detailList}>
+                {[...selectedTemplate.exercises]
+                  .sort((first, second) => first.order - second.order)
+                  .map((entry, index) => (
+                    <li className={styles.detailExercise} key={`${entry.exerciseId}-${index}`}>
+                      <span className={styles.exerciseNumber}>{index + 1}</span>
+                      <div>
+                        <h3 className={styles.sectionTitle}>
+                          {exerciseById.get(entry.exerciseId)?.name ?? messages.missingExercise}
+                        </h3>
+                        <p className={controls.muted}>
+                          {planMessage(messages.exercisePlan, {
+                            sets:
+                              entry.targetSets === null
+                                ? messages.noTargetSets
+                                : planMessage(messages.targetSetCount, { count: entry.targetSets }),
+                            rest:
+                              entry.restSeconds === null
+                                ? messages.noRest
+                                : planMessage(messages.restSecondsCount, {
+                                    seconds: entry.restSeconds,
+                                  }),
+                          })}
+                        </p>
+                        {entry.notes ? <p className={styles.notes}>{entry.notes}</p> : null}
+                      </div>
+                    </li>
+                  ))}
+              </ol>
+            </>
+          ) : null}
+          {sheet.kind === "actions" && selectedTemplate ? (
+            <div className={styles.actionList}>
+              <button
+                type="button"
+                className={styles.actionButton}
+                onClick={() =>
+                  beginEditor(
+                    toPlanDraft(selectedTemplate.name, selectedTemplate.exercises),
+                    selectedTemplate.id,
+                  )
+                }
+              >
+                <Pencil className={controls.icon} aria-hidden="true" />
+                {messages.editAction}
+              </button>
+              <button
+                type="button"
+                className={styles.actionButton}
+                onClick={() =>
+                  beginEditor(
+                    toPlanDraft(
+                      planMessage(messages.duplicateName, { name: selectedTemplate.name }),
+                      selectedTemplate.exercises,
+                    ),
+                  )
+                }
+              >
+                <Copy className={controls.icon} aria-hidden="true" />
+                {messages.duplicateAction}
+              </button>
+              <button
+                type="button"
+                className={controls.button({ variant: "danger" })}
+                onClick={() => {
+                  setDeleteError(null);
+                  isSwitchingDialog.current = true;
+                  setSheet({ kind: "delete", template: selectedTemplate });
+                }}
+              >
+                <Trash2 className={controls.icon} aria-hidden="true" />
+                {messages.deleteConfirmAction}
+              </button>
+            </div>
+          ) : null}
+        </PlanDialog>
+      ) : null}
+      {sheet?.kind === "delete" ? (
+        <PlanConfirmation
+          open={isActive}
+          onOpenChange={(open) => {
+            if (!open) setSheet(null);
+          }}
+          title={messages.deleteConfirmTitle}
+          description={planMessage(messages.deleteNamedDescription, { name: sheet.template.name })}
+          confirmLabel={isDeleting ? messages.deletingAction : messages.deleteConfirmAction}
+          cancelLabel={messages.deleteCancelAction}
+          onConfirm={() => void deletePlan(sheet.template)}
+          busy={isDeleting}
+          error={deleteError}
+          getReturnFocus={() => returnFocus.current}
+        />
+      ) : null}
+      {editor ? (
+        <WorkoutPlanEditor
+          initialDraft={editor.draft}
+          templateId={editor.templateId}
+          isActive={isActive}
+          exercises={exercises}
+          repository={templateRepository}
+          messages={messages}
+          onSaved={handleSaved}
+          onClose={() => setEditor(null)}
+          onOpenExercises={onOpenExercises}
+          returnFocus={returnFocus.current}
+        />
       ) : null}
     </section>
   );

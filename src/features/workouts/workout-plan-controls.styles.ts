@@ -1,0 +1,96 @@
+import { css, cva } from "styled-system/css";
+
+const corners = {
+  borderStartStartRadius: "10px",
+  borderStartEndRadius: "10px",
+  borderEndStartRadius: "10px",
+  borderEndEndRadius: "10px",
+} as const;
+
+export const styles = {
+  button: cva({
+    base: {
+      ...corners,
+      minBlockSize: "44px",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "8px",
+      paddingBlock: "10px",
+      paddingInline: "14px",
+      borderBlockWidth: "1px",
+      borderInlineWidth: "1px",
+      borderStyle: "solid",
+      fontSize: "14px",
+      fontWeight: "750",
+      lineHeight: "1.3",
+      cursor: "pointer",
+      _focusVisible: { outline: "2px solid token(colors.accent)", outlineOffset: "3px" },
+      _disabled: { opacity: "0.45", cursor: "not-allowed" },
+    },
+    variants: {
+      variant: {
+        primary: {
+          backgroundColor: "accent",
+          color: "bg",
+          borderColor: "accent",
+          _hover: { backgroundColor: "accentHover" },
+        },
+        secondary: {
+          backgroundColor: "cardElevated",
+          color: "fg",
+          borderColor: "line",
+          _hover: { backgroundColor: "surfacePressed" },
+        },
+        ghost: {
+          backgroundColor: "transparent",
+          color: "fgMuted",
+          borderColor: "transparent",
+          _hover: { backgroundColor: "cardElevated", color: "fg" },
+        },
+        danger: { backgroundColor: "dangerSoft", color: "danger", borderColor: "dangerSoft" },
+      },
+      square: {
+        true: { inlineSize: "44px", minInlineSize: "44px", paddingInline: "0", paddingBlock: "0" },
+      },
+    },
+    defaultVariants: { variant: "secondary" },
+  }),
+  input: css({
+    ...corners,
+    inlineSize: "100%",
+    minInlineSize: "0",
+    minBlockSize: "46px",
+    paddingBlock: "10px",
+    paddingInline: "12px",
+    backgroundColor: "bgSoft",
+    color: "fg",
+    borderBlockWidth: "1px",
+    borderInlineWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "line",
+    fontSize: "16px",
+    _focusVisible: { outline: "2px solid token(colors.accent)", outlineOffset: "2px" },
+    _placeholder: { color: "fgSubtle" },
+  }),
+  field: css({
+    display: "grid",
+    minInlineSize: "0",
+    gap: "8px",
+    color: "fgMuted",
+    fontSize: "13px",
+    fontWeight: "650",
+  }),
+  icon: css({ inlineSize: "18px", blockSize: "18px", flexShrink: "0" }),
+  muted: css({ color: "fgMuted", fontSize: "14px", lineHeight: "1.5", overflowWrap: "anywhere" }),
+  feedback: css({
+    paddingBlock: "12px",
+    paddingInline: "14px",
+    backgroundColor: "orangeSoft",
+    color: "warning",
+    ...corners,
+    fontSize: "14px",
+    lineHeight: "1.5",
+  }),
+  hidden: css({ srOnly: true }),
+};

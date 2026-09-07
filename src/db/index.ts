@@ -76,3 +76,5 @@ export type {
   WorkoutTemplateRepository,
   WorkoutTemplateRepositoryOptions,
 } from "./repositories";
+
+export { createTemplateExerciseBlocks } from "./workout-template-utils";

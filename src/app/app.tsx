@@ -115,6 +115,11 @@ export const App = ({ locale = defaultLocale }: AppProps) => {
           key={`workouts-${dataResetVersion}`}
           isActive={isWorkoutsActive}
           messages={messages.workouts}
+          locale={locale}
+          onOpenExercises={() => {
+            setSelectedExerciseId(null);
+            setActiveView("exercises");
+          }}
           onSessionStarted={() => setActiveView("sessions")}
         />
       </div>

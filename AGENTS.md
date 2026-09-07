@@ -64,6 +64,7 @@ Technical direction:
 - Keep active workout screens glanceable: exercise name, current set, previous set data, weight, reps, and timer should be easy to read quickly.
 - Use a compact workout overview for exercise selection and a distraction-free, full-page logger for the focused exercise.
 - Review completed sets, incomplete targets, effort, and optional confidence changes before finalizing an active workout.
+- Keep plan libraries compact, with full prescriptions in a detail view and an ordered mobile editor; stage exercise-picker selections until confirmed and protect unsaved plan drafts.
 - Make destructive actions reversible or confirmed, especially deleting sessions, templates, or exercises.
 - Respect reduced-motion preferences. Animation should clarify state changes, not delay logging.
 - The app should remain usable offline after installation or after the first successful load.
